@@ -110,6 +110,20 @@ class Settings(BaseSettings):
         return value
 
     @model_validator(mode="after")
+    def _reject_shared_session_and_encryption_keys(self) -> Settings:
+        # Separation only helps if it is real. Reusing one value would mean a
+        # session-signing leak also opens every stored credential.
+        if (
+            self.app_secret_key.get_secret_value()
+            == self.credentials_encryption_key.get_secret_value()
+        ):
+            raise ValueError(
+                "CREDENTIALS_ENCRYPTION_KEY must differ from APP_SECRET_KEY: one "
+                "signs sessions, the other encrypts stored credentials"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _reject_placeholder_secret_in_production(self) -> Settings:
         if (
             self.app_env == "production"

@@ -45,13 +45,11 @@ def test_the_credentials_key_must_be_a_fernet_key() -> None:
         build_settings(credentials_encryption_key="not-a-fernet-key")
 
 
-def test_the_credentials_key_is_independent_from_the_app_secret() -> None:
-    settings = build_settings()
+def test_the_credentials_key_must_differ_from_the_app_secret() -> None:
+    shared = VALID_CREDENTIALS_KEY
 
-    assert (
-        settings.credentials_encryption_key.get_secret_value()
-        != settings.app_secret_key.get_secret_value()
-    )
+    with pytest.raises(ValidationError, match="must differ"):
+        build_settings(app_secret_key=shared, credentials_encryption_key=shared)
 
 
 def test_allowed_hosts_accepts_comma_separated_env_value() -> None:
