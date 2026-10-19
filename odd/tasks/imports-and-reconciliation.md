@@ -293,7 +293,7 @@ unexplained difference. Approval uses that strict definition because this phase
 has no justification model; the specification's "unjustified differences" is
 narrower, and the conservative reading never approves what it cannot explain.
 
-Verification: **380 passed**; `ruff check` and `ruff format --check` clean;
+Verification: **381 passed**; `ruff check` and `ruff format --check` clean;
 29 API tests and 7 balance tests. `alembic check` reports no drift. Advisory: `GET /matches/{id}` was added beyond
 §9.5 so the UI can refresh one match after a decision; recorded here like the
 imports listing.
@@ -323,7 +323,8 @@ imports listing.
 
 Risk correction: a confirmed match is no longer irreversible.
 `POST /matches/{id}/cancel` accepts a confirmed match, marks it `released` and
-returns its movements to the available pool. Rejected suggestions remain
+returns its movements to the available pool. If the period is already approved,
+the undo is refused until the period is reopened, so an approval cannot drift. Rejected suggestions remain
 rejected; alternatives that were auto-cancelled by a confirmation are marked
 with `auto_cancelled_by_match_id` and become eligible again once the confirmation
 is released. Migration `5bc654f7727d` adds the `released` column.

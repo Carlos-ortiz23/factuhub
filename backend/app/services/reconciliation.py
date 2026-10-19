@@ -492,6 +492,9 @@ def cancel_match(
     if match is None or match.organization_id != organization_id:
         raise MatchNotFoundError("Match not found.")
     if match.status is MatchStatus.CONFIRMED:
+        period = db.get(ReconciliationPeriod, match.period_id, with_for_update=True)
+        if period is not None and period.status is PeriodStatus.APPROVED:
+            raise PeriodConflictError("Reopen the period before undoing a confirmed match.")
         match.released = True
         action = "reconciliation.match_confirmation_cancelled"
     elif match.status is MatchStatus.SUGGESTED:

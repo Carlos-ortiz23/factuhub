@@ -756,3 +756,27 @@ def test_a_viewer_can_export_the_period(auth_client: TestClient) -> None:
     response = viewer.get(f"{PERIODS}/{period['id']}/export")
 
     assert response.status_code == 200
+
+
+def test_undoing_a_confirmation_requires_reopening_an_approved_period(
+    auth_client: TestClient,
+) -> None:
+    organization = company(auth_client)
+    account = bank_account(auth_client, organization["id"])
+    import_pair(auth_client, organization["id"], account["id"])
+    period = create_period(auth_client, account["id"]).json()
+    match = generate(auth_client, period["id"])["matches"][0]
+    auth_client.post(f"{MATCHES}/{match['id']}/confirm", headers=csrf_headers(auth_client))
+    auth_client.post(f"{PERIODS}/{period['id']}/submit-review", headers=csrf_headers(auth_client))
+    auth_client.post(f"{PERIODS}/{period['id']}/approve", headers=csrf_headers(auth_client))
+
+    blocked = auth_client.post(f"{MATCHES}/{match['id']}/cancel", headers=csrf_headers(auth_client))
+    assert blocked.status_code == 409
+    assert "Reopen" in blocked.json()["detail"]
+
+    auth_client.post(f"{PERIODS}/{period['id']}/reopen", headers=csrf_headers(auth_client))
+    released = auth_client.post(
+        f"{MATCHES}/{match['id']}/cancel", headers=csrf_headers(auth_client)
+    )
+    assert released.status_code == 200
+    assert released.json()["released"] is True
