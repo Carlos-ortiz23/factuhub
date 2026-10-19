@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 import secrets
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.cookies import CSRF_HEADER_NAME, csrf_cookie_name
 from app.core.config import Settings
+from app.core.permissions import Permission, role_has_permission
 from app.db.session import get_session_factory
-from app.models import User, UserSession
+from app.models import MembershipRole, Organization, User, UserSession
 from app.services import auth as auth_service
+from app.services import organizations as organizations_service
 
 #: Methods that do not change state and therefore do not need a CSRF token.
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
@@ -105,3 +108,65 @@ def require_csrf(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="CSRF token missing or invalid.",
         )
+
+
+@dataclass(frozen=True, slots=True)
+class OrganizationContext:
+    """The company being operated on, and the caller's role inside it."""
+
+    organization: Organization
+    role: MembershipRole
+
+    @property
+    def organization_id(self) -> UUID:
+        return self.organization.id
+
+    def can(self, permission: Permission) -> bool:
+        """Whether the caller may perform `permission` in this company.
+
+        Handlers use this for decisions the route cannot express — showing a
+        field only to an approver, for instance — while the dependency below
+        remains the enforcement point.
+        """
+        return role_has_permission(self.role, permission)
+
+
+def require_permission(permission: Permission) -> Callable[..., OrganizationContext]:
+    """Build the dependency that enforces `permission` on one company.
+
+    Usage: `context: Annotated[OrganizationContext, Depends(require_permission(Permission.READ))]`
+    on a route carrying `{organization_id}`.
+
+    Two rules are deliberate:
+
+    * Membership is checked before the permission, and a non-member gets 404,
+      not 403. Answering 403 would confirm the company exists.
+    * The role is resolved from the database on every request, never from
+      anything the client sent. A role carried in a token would be a role that
+      stays valid after it was revoked.
+    """
+
+    def dependency(
+        organization_id: UUID,
+        db: Annotated[Session, Depends(get_db_session)],
+        auth: Annotated[AuthContext, Depends(get_auth_context)],
+    ) -> OrganizationContext:
+        found = organizations_service.find_membership(
+            db, organization_id=organization_id, user_id=auth.user.id
+        )
+        if found is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Organization not found.",
+            )
+
+        organization, role = found
+        if not role_has_permission(role, permission):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Your role in this organization cannot {permission.value}.",
+            )
+
+        return OrganizationContext(organization=organization, role=role)
+
+    return dependency

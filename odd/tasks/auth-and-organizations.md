@@ -190,13 +190,18 @@ Verbatim from the specification (§17):
 | A3 | S5 | Password hashing (Argon2id) and session-token primitives | inline | done | `app/core/security.py`; 15 unit tests; commit `97e6e9a` |
 | A4 | S5 | Server-side sessions and the registration/authentication service | inline | done | `app/models/user_session.py`, `app/services/auth.py`; revision `1be4915f3856`; 21 integration tests |
 | A5 | S5 | Auth endpoints: register, login, logout, me, with rate limiting and CSRF | inline | done | `api/v1/endpoints/auth.py`, `api/deps.py`, `api/cookies.py`; revision `246fdeef0361`; 21 API + throttle tests |
-| A6 | S6 | RBAC dependency: role checks enforced per operation in the backend | inline | pending | — |
+| A6 | S6 | RBAC: permission matrix and the `require_permission` dependency enforced per operation | inline | done | `app/core/permissions.py`, `api/deps.py::require_permission`; 7 unit tests; used by every organization route |
 | A7 | S6, S7 | Row-level security policies plus the non-superuser application role they need to be real | inline | pending | — |
 | A8 | S4 | Audit service wired into the actions the specification lists | inline | pending | — |
 | A9 | S8 | Isolation tests: another organization's data is unreachable | inline | pending | — |
+| A10 | S6 | Organization endpoints: create, list, detail | inline | done | `api/v1/endpoints/organizations.py`, `app/services/organizations.py`; RED `ModuleNotFoundError: app.core.permissions`, GREEN 104 passed with 9 new integration tests |
+| A11 | S6 | Membership management: add member, change role, remove member; 403 denials and last-admin protection | inline | pending | — |
 
 Task IDs A5-A9 were renumbered when the session work split away from the
 endpoints task; A1-A4 keep the meaning they had when they were committed.
+
+A6 is the *mechanism* and A10 is its first *caller*; they are separate rows
+because A7 (row-level security) depends on the mechanism, not on the endpoints.
 
 ## Log
 
@@ -343,4 +348,66 @@ data-protection obligations in §12.2).
 Test note: the CSRF tests assert both directions — the same logout that answers
 204 with the header answers 403 without it, so the check is proven to
 discriminate rather than merely to exist.
+
+### L7 — Authorization and the first tenant-scoped endpoints (2026-10-19)
+
+Spec §11.2 lists the permissions to verify per operation (read, import,
+reconcile, approve, integration configuration) and §7.2 names the four roles, but
+the specification never joins the two. That join is an **assumption**, written
+into `app/core/permissions.py` and recorded here so it can be corrected by the
+user rather than discovered later:
+
+| Role | Permissions |
+| --- | --- |
+| `admin` | every permission |
+| `accountant` | read, import, reconcile, manage integrations |
+| `reviewer` | read, approve |
+| `viewer` | read only |
+
+`MANAGE_MEMBERS` is not in §11.2's list; it is needed by the membership
+endpoints and is added as a named assumption, not smuggled in. The reviewer is
+deliberately denied `reconcile`: separation of duties is the point of having a
+reviewer at all (§7.7 has the reviewer approve or reopen what somebody else
+produced).
+
+Design decisions worth not re-litigating:
+
+- **404, never 403, for a company you do not belong to.** Answering 403 would
+  confirm that the identifier belongs to a real company, turning the API into an
+  enumeration oracle. One test pins this, and the two neighbouring tests (401
+  anonymous, 200 as a member) prove the 404 comes from the membership check and
+  not from something else.
+- **The role is read from the database on every request.** Nothing about
+  authorization is carried in the session cookie or sent by the client, so a
+  role change takes effect on the next request instead of when a token expires.
+- **Creating a company makes the caller its admin in one savepoint.** A company
+  with no admin would be unreachable, so the state must not be observable.
+- **The duplicate-tax-id answer comes from the database constraint**, not from a
+  prior `SELECT` that would still race; the endpoint translates the
+  `IntegrityError` into a 409 rather than a 500.
+- **RBAC is a mechanism with its own tests** (`test_permissions.py`, 7 unit
+  tests, no database) and the routes are just callers. The matrix is exhaustive
+  over `MembershipRole` by test, so a fifth role cannot be added without
+  deciding its permissions.
+
+Honest gap: **no route can produce a 403 yet.** Every role holds `READ`, so the
+only permission enforced today is one nobody lacks. The first real denial test
+arrives with A11, where `MANAGE_MEMBERS` is required and `viewer`/`reviewer`/
+`accountant` must be refused. Until then the 403 branch of
+`require_permission` is written but unexercised.
+
+Tests: 16 new (104 total), all green; ruff clean. Test-first held this time — the
+two test files were written and run before any of the implementation existed, and
+the observed failure was `ModuleNotFoundError: No module named
+'app.core.permissions'`.
+
+Test-writing note, recorded because it cost two runs: the `client` fixture is an
+*unauthenticated* client; authenticated tests need `auth_client`. Eight tests
+were green-by-accident until the fixture was fixed, which is a reminder that a
+test that fails for the wrong reason can also pass for the wrong reason.
+
+Open decision for the user (their domain, not mine to guess): whether
+`900123456-7` and `900123456` are the same NIT. Today they are two different
+companies because the platform compares the string exactly. Normalising NITs
+without knowing how their clients write them would be inventing a rule.
 
