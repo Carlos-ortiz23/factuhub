@@ -189,7 +189,7 @@ Verbatim from the specification (§17):
 | A2 | S4, S7 | Migration with integrity constraints, indexes and the append-only audit trigger | inline | done | revision `6292f9b04939`; upgrade/downgrade round trip proven; trigger present in `pg_trigger` |
 | A3 | S5 | Password hashing (Argon2id) and session-token primitives | inline | done | `app/core/security.py`; 15 unit tests; commit `97e6e9a` |
 | A4 | S5 | Server-side sessions and the registration/authentication service | inline | done | `app/models/user_session.py`, `app/services/auth.py`; revision `1be4915f3856`; 21 integration tests |
-| A5 | S5 | Auth endpoints: register, login, logout, me, with rate limiting and CSRF | inline | pending | — |
+| A5 | S5 | Auth endpoints: register, login, logout, me, with rate limiting and CSRF | inline | done | `api/v1/endpoints/auth.py`, `api/deps.py`, `api/cookies.py`; revision `246fdeef0361`; 21 API + throttle tests |
 | A6 | S6 | RBAC dependency: role checks enforced per operation in the backend | inline | pending | — |
 | A7 | S6, S7 | Row-level security policies plus the non-superuser application role they need to be real | inline | pending | — |
 | A8 | S4 | Audit service wired into the actions the specification lists | inline | pending | — |
@@ -305,4 +305,42 @@ Deliberately deferred, so it is not mistaken for forgotten: no `last_used_at`
 (nothing in the specification needs it and it would add a write per request) and
 no IP or user-agent stored on the session (data minimisation, given the
 data-protection obligations in §12.2).
+
+### L6 — A5 complete (2026-10-19)
+
+`api/v1/endpoints/auth.py`, `api/deps.py`, `api/cookies.py`, revision
+`246fdeef0361`. Suite: 76 passed.
+
+- **Rate limiting lives in PostgreSQL** (the user approved this explicitly:
+  "si es lo mejor hazlo así como dices"). A per-worker dictionary protects one
+  worker out of N and resets when the process restarts. The check and the
+  increment are a single atomic step — `INSERT ... ON CONFLICT DO NOTHING` then
+  `SELECT ... FOR UPDATE` — because a plain check-then-record lets a burst of
+  parallel requests all observe the same stale count. Each *reserved* attempt is
+  committed before the password is verified: a failed login ends in an
+  exception, and rolling the counter back with it is exactly how a rate limiter
+  stops limiting.
+- The lockout window is fixed from the first failure and never slides, so the
+  lock always ends after 15 minutes. The accepted trade-off: someone who knows an
+  address can lock it for that window. The alternative (no per-address limit)
+  would let an attacker guess passwords forever, which is worse.
+- **CSRF is bound to the session**, not merely double-submitted. The token is
+  stored with the session; a state-changing request must send it in
+  `X-CSRF-Token` and it must match both the readable cookie and the stored value,
+  so a cookie injected from a sibling subdomain fails. `SameSite=Lax` is the
+  baseline and implies a deployment constraint now documented in
+  `docs/architecture.md`: API and web app stay same-site.
+- `POST /auth/register` intentionally does not sign the user in, so registration
+  never leaves a session behind. `/auth/login` does.
+- The password policy is owned by the domain, not duplicated in the Pydantic
+  schema: the endpoint translates `PasswordPolicyError` into a 422. One
+  definition of "valid password", and the translation is covered by a test.
+- The 429 response carries `Retry-After`, and login failures return one message
+  for a wrong password, an unknown address and a disabled account.
+- `email-validator` was added as a dependency rather than hand-rolling address
+  validation.
+
+Test note: the CSRF tests assert both directions — the same logout that answers
+204 with the header answers 403 without it, so the check is proven to
+discriminate rather than merely to exist.
 

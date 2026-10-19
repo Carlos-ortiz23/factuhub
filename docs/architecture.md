@@ -66,6 +66,32 @@ Development and test data live in separate PostgreSQL instances with separate
 volumes. A test run that drops and recreates schema cannot destroy work in
 progress, and the isolation is enforced by infrastructure rather than discipline.
 
+### Sessions, cookies and CSRF
+
+Authentication is a database row, not a signed token. `sessions` stores only the
+SHA-256 digest of the token, its deadline, a revocation timestamp and a CSRF
+token bound to that session. Every authenticated request therefore re-checks the
+deadline, the revocation flag and `users.is_active`, which is what makes
+"quitale el acceso" take effect immediately instead of whenever a cookie expires.
+
+Two cookies are issued at login: the session cookie is `HttpOnly` and
+`SameSite=Lax`; the CSRF cookie is readable on purpose, because the frontend has
+to copy it into `X-CSRF-Token`. State-changing requests must send that header,
+and the server compares it against the value stored with the session — a cookie
+injected from a sibling subdomain does not match. `SameSite=Lax` also means the
+API and the web app must be deployed on the same site (different subdomains are
+fine); a truly cross-site frontend would need a different scheme, not a weaker
+cookie.
+
+Failed logins are counted per normalised email in `login_throttles`, with the
+check and the increment performed as one atomic `INSERT ... ON CONFLICT` plus
+`SELECT ... FOR UPDATE`. The row lock is what stops a burst of parallel requests
+from all passing the same stale check. The counter lives in PostgreSQL rather
+than process memory because a per-worker dictionary would multiply the budget by
+the number of instances. The trade-off is deliberate and visible: someone who
+knows an address can lock it out for fifteen minutes, which is why the window is
+fixed (never sliding) and short.
+
 ### Row-level security as a second layer
 
 Multi-tenancy is enforced in the backend on every request. PostgreSQL RLS is an
@@ -77,9 +103,10 @@ its test.
 
 Deferred to the phases that own them, deliberately not stubbed here:
 
-- Authentication, sessions, MFA, rate limiting (phase: auth).
-- Trusted-host and CORS middleware, CSRF protection (phase: auth, together with
-  the first cookie-based session).
+- CORS and trusted-host middleware (needed only if the web app stops being
+  same-site; the cookie scheme above deliberately assumes it stays same-site).
+- MFA for administrators and approvers (§11.1 calls it recommended, not required).
+- Password recovery and email delivery.
 - Object storage for original files (phase: imports).
 - Redis/Celery — only if measured volume requires it.
 - Centralised logging, monitoring and backups (phase: deployment).

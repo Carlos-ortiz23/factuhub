@@ -21,6 +21,11 @@ from app.models.mixins import CreatedAtMixin, UuidPrimaryKeyMixin
 #: Hex SHA-256 digest of the session token.
 TOKEN_HASH_LENGTH = 64
 
+#: Capacity for the CSRF token, which is a 43-character base64url value. It is
+#: intentionally *not* hashed: the browser must be able to read it to echo it
+#: back, and on its own it grants nothing.
+CSRF_TOKEN_MAX_LENGTH = 64
+
 
 class UserSession(Base, UuidPrimaryKeyMixin, CreatedAtMixin):
     """One issued session token, stored as a digest."""
@@ -40,6 +45,12 @@ class UserSession(Base, UuidPrimaryKeyMixin, CreatedAtMixin):
     token_hash: Mapped[str] = mapped_column(String(TOKEN_HASH_LENGTH), nullable=False, unique=True)
 
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    # Sent to the browser in a cookie the frontend can read, and echoed back in
+    # the `X-CSRF-Token` header. Stored server-side so that comparing it against
+    # the cookie alone is not the whole check: a cookie injected from a sibling
+    # domain does not match the token bound to this session.
+    csrf_token: Mapped[str] = mapped_column(String(CSRF_TOKEN_MAX_LENGTH), nullable=False)
 
     # Set instead of deleting the row: a revoked session is evidence, and
     # "cuándo se cerró esta sesión" is a question a client will eventually ask.

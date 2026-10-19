@@ -113,7 +113,7 @@ def test_a_new_session_stores_only_the_digest_of_its_token(db_session: Session) 
         db_session, email="contador@example.com", full_name="Uno", password=PASSWORD
     )
 
-    token, session_row = auth.create_session(db_session, user=user)
+    token, _, session_row = auth.create_session(db_session, user=user)
 
     stored = db_session.execute(text("SELECT token_hash FROM sessions")).scalar_one()
     assert stored == hash_session_token(token)
@@ -126,7 +126,7 @@ def test_a_fresh_token_resolves_to_its_user(db_session: Session) -> None:
     user = auth.register_user(
         db_session, email="contador@example.com", full_name="Uno", password=PASSWORD
     )
-    token, _ = auth.create_session(db_session, user=user)
+    token, _, _ = auth.create_session(db_session, user=user)
 
     resolved = auth.resolve_session(db_session, token=token)
 
@@ -138,7 +138,7 @@ def test_the_session_expires_when_its_ttl_has_passed(db_session: Session) -> Non
     user = auth.register_user(
         db_session, email="contador@example.com", full_name="Uno", password=PASSWORD
     )
-    token, session_row = auth.create_session(db_session, user=user, ttl=timedelta(hours=1))
+    token, _, session_row = auth.create_session(db_session, user=user, ttl=timedelta(hours=1))
 
     assert session_row.expires_at - session_row.created_at >= timedelta(minutes=55)
 
@@ -153,7 +153,7 @@ def test_a_revoked_session_stops_resolving(db_session: Session) -> None:
     user = auth.register_user(
         db_session, email="contador@example.com", full_name="Uno", password=PASSWORD
     )
-    token, _ = auth.create_session(db_session, user=user)
+    token, _, _ = auth.create_session(db_session, user=user)
 
     assert auth.revoke_session(db_session, token=token) is True
     assert auth.resolve_session(db_session, token=token) is None
@@ -179,7 +179,7 @@ def test_deactivating_a_user_kills_their_live_sessions(db_session: Session) -> N
     user = auth.register_user(
         db_session, email="contador@example.com", full_name="Uno", password=PASSWORD
     )
-    token, _ = auth.create_session(db_session, user=user)
+    token, _, _ = auth.create_session(db_session, user=user)
     user.is_active = False
     db_session.flush()
 
@@ -194,8 +194,8 @@ def test_revoking_sessions_can_target_one_token_or_every_token_of_a_user(
     user = auth.register_user(
         db_session, email="contador@example.com", full_name="Uno", password=PASSWORD
     )
-    first, _ = auth.create_session(db_session, user=user)
-    second, _ = auth.create_session(db_session, user=user)
+    first, _, _ = auth.create_session(db_session, user=user)
+    second, _, _ = auth.create_session(db_session, user=user)
 
     assert auth.revoke_all_sessions(db_session, user_id=user.id) == 2
     assert auth.resolve_session(db_session, token=first) is None
@@ -223,3 +223,58 @@ def test_the_stored_credential_is_an_argon2id_hash(db_session: Session) -> None:
     # algorithm, or stored a plain digest, must fail here instead of in an audit.
     assert user.password_hash.startswith("$argon2id$")
     assert verify_password(PASSWORD, user.password_hash) is True
+
+
+def test_a_login_attempt_is_allowed_until_the_budget_is_spent(db_session: Session) -> None:
+    for _ in range(auth.MAX_LOGIN_ATTEMPTS):
+        assert auth.claim_login_attempt(db_session, email="contador@example.com") is None
+
+    retry_after = auth.claim_login_attempt(db_session, email="contador@example.com")
+
+    assert retry_after is not None
+    assert retry_after > 0
+
+
+def test_the_lockout_ends_when_the_window_ends(db_session: Session) -> None:
+    for _ in range(auth.MAX_LOGIN_ATTEMPTS):
+        auth.claim_login_attempt(db_session, email="contador@example.com")
+    assert auth.claim_login_attempt(db_session, email="contador@example.com") is not None
+
+    # Move the window into the past instead of sleeping for fifteen minutes.
+    db_session.execute(
+        text(
+            "UPDATE login_throttles SET window_started_at = window_started_at - :offset "
+            "WHERE email = :email"
+        ),
+        {
+            "offset": auth.LOGIN_ATTEMPT_WINDOW + timedelta(seconds=1),
+            "email": "contador@example.com",
+        },
+    )
+    db_session.flush()
+
+    assert auth.claim_login_attempt(db_session, email="contador@example.com") is None
+
+
+def test_the_attempt_budget_is_per_address(db_session: Session) -> None:
+    for _ in range(auth.MAX_LOGIN_ATTEMPTS):
+        auth.claim_login_attempt(db_session, email="contador@example.com")
+
+    assert auth.claim_login_attempt(db_session, email="otro@example.com") is None
+
+
+def test_clearing_attempts_returns_the_full_budget(db_session: Session) -> None:
+    for _ in range(auth.MAX_LOGIN_ATTEMPTS):
+        auth.claim_login_attempt(db_session, email="contador@example.com")
+
+    auth.clear_login_attempts(db_session, email="contador@example.com")
+
+    assert auth.claim_login_attempt(db_session, email="contador@example.com") is None
+
+
+def test_the_throttle_normalizes_the_address(db_session: Session) -> None:
+    for _ in range(auth.MAX_LOGIN_ATTEMPTS):
+        auth.claim_login_attempt(db_session, email="Contador@Example.com")
+
+    # Same mailbox, different case: the budget is shared, not duplicated.
+    assert auth.claim_login_attempt(db_session, email="contador@example.com") is not None

@@ -12,6 +12,7 @@ from functools import lru_cache
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -22,7 +23,7 @@ from app.core.security import (
     hash_session_token,
     verify_password,
 )
-from app.models import User, UserSession
+from app.models import LoginThrottle, User, UserSession
 
 
 class RegistrationError(ValueError):
@@ -119,31 +120,32 @@ def create_session(
     *,
     user: User,
     ttl: timedelta | None = None,
-) -> tuple[str, UserSession]:
-    """Issue a new session and return `(raw_token, stored_row)`.
+) -> tuple[str, str, UserSession]:
+    """Issue a new session and return `(raw_token, csrf_token, stored_row)`.
 
     The raw token is returned exactly once, to be placed in a cookie. Only its
-    digest is persisted.
+    digest is persisted. The CSRF token is bound to this session and must be
+    echoed back by the client on state-changing requests.
     """
     effective_ttl = ttl if ttl is not None else timedelta(hours=get_settings().session_ttl_hours)
     token = generate_session_token()
+    csrf_token = generate_session_token()
     session_row = UserSession(
         user_id=user.id,
         token_hash=hash_session_token(token),
+        csrf_token=csrf_token,
         expires_at=datetime.now(UTC) + effective_ttl,
     )
     db.add(session_row)
     db.flush()
-    return token, session_row
+    return token, csrf_token, session_row
 
 
-def resolve_session(db: Session, *, token: str) -> User | None:
-    """Return the active user behind a raw token, or `None`.
+def resolve_session_context(db: Session, *, token: str) -> tuple[User, UserSession] | None:
+    """Return `(user, session_row)` for a usable token, or `None`.
 
-    Checks the token's digest, the session's deadline, its revocation state and
-    the account's current `is_active` flag. The last check is why this is a
-    database read and not a signature verification: disabling a person must take
-    effect now, not when their cookie happens to expire.
+    The row comes back alongside the user because state-changing requests need
+    the CSRF token bound to this exact session.
     """
     if not token:
         return None
@@ -157,7 +159,19 @@ def resolve_session(db: Session, *, token: str) -> User | None:
     user = db.get(User, session_row.user_id)
     if user is None or not user.is_active:
         return None
-    return user
+    return user, session_row
+
+
+def resolve_session(db: Session, *, token: str) -> User | None:
+    """Return the active user behind a raw token, or `None`.
+
+    Checks the token's digest, the session's deadline, its revocation state and
+    the account's current `is_active` flag. The last check is why this is a
+    database read and not a signature verification: disabling a person must take
+    effect now, not when their cookie happens to expire.
+    """
+    context = resolve_session_context(db, token=token)
+    return context[0] if context is not None else None
 
 
 def revoke_session(db: Session, *, token: str) -> bool:
@@ -193,3 +207,66 @@ def revoke_all_sessions(db: Session, *, user_id: UUID) -> int:
         session_row.revoked_at = now
     db.flush()
     return len(sessions)
+
+
+# --- Login throttling ------------------------------------------------------
+
+#: Attempts allowed per address inside one window. Five is low enough to make
+#: guessing expensive and high enough that a person who mistypes a password
+#: twice is not locked out of their own accounting work.
+MAX_LOGIN_ATTEMPTS = 5
+
+#: The window is fixed from the first attempt, so the lockout always ends after
+#: a predictable time instead of sliding forward with every retry.
+LOGIN_ATTEMPT_WINDOW = timedelta(minutes=15)
+
+
+def claim_login_attempt(db: Session, *, email: str) -> int | None:
+    """Reserve one login attempt for `email`.
+
+    Returns `None` when the attempt may proceed, or the number of seconds the
+    caller should wait otherwise.
+
+    The check and the increment are one atomic operation: the row is inserted if
+    missing and locked with `FOR UPDATE`, so a burst of parallel requests is
+    serialised by PostgreSQL instead of all passing a check that none of them
+    has updated yet.
+    """
+    normalized_email = normalize_email(email)
+    now = datetime.now(UTC)
+
+    db.execute(
+        pg_insert(LoginThrottle)
+        .values(email=normalized_email, failed_count=0, window_started_at=now)
+        .on_conflict_do_nothing(index_elements=["email"])
+    )
+    throttle = db.scalar(
+        select(LoginThrottle).where(LoginThrottle.email == normalized_email).with_for_update()
+    )
+    if throttle is None:  # pragma: no cover - the insert above guarantees the row
+        raise RuntimeError("login throttle row disappeared between insert and lock")
+
+    if now - throttle.window_started_at >= LOGIN_ATTEMPT_WINDOW:
+        throttle.failed_count = 0
+        throttle.window_started_at = now
+
+    if throttle.failed_count >= MAX_LOGIN_ATTEMPTS:
+        remaining = throttle.window_started_at + LOGIN_ATTEMPT_WINDOW - now
+        return max(1, int(remaining.total_seconds()) + 1)
+
+    throttle.failed_count += 1
+    db.flush()
+    return None
+
+
+def clear_login_attempts(db: Session, *, email: str) -> None:
+    """Forget the failures of an address after a successful sign-in.
+
+    Deleting the row rather than zeroing the counter keeps the table bounded by
+    the number of addresses currently in trouble, not by every address that ever
+    mistyped a password.
+    """
+    throttle = db.scalar(select(LoginThrottle).where(LoginThrottle.email == normalize_email(email)))
+    if throttle is not None:
+        db.delete(throttle)
+        db.flush()
