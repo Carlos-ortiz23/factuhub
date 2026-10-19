@@ -117,6 +117,41 @@ field capable of holding a credential, and the app's validation handler strips
 FastAPI's `input` echo so a rejected payload cannot write the secret into an
 error body.
 
+### Imports: the interpretation is explicit
+
+A bank exports `1.234,56`; another exports `1,234.56`. The same characters mean
+different amounts, and `01/02/2026` is two different days depending on the
+convention. Guessing either one imports wrong money that still looks plausible,
+so an import carries a column mapping (header names, not positions) plus an
+`ImportOptions` with `date_format`, `decimal_separator`, and — when the file has
+a single signed amount and no direction column — `positive_is`.
+
+The reader validates the mapping against the real header before creating a job,
+so a typo is one clear `422` instead of a file full of row errors. Amounts are
+stored as integer minor units, always positive, with `direction` carrying the
+sign: a single signed number would force every reader to remember which sign
+means "money in" for a bank versus a ledger account.
+
+Idempotency is keyed by the file's SHA-256 plus a hash of the mapping and
+options. Uploading the same bytes with the same interpretation is refused
+(`409`); the same file with a corrected interpretation is a new, legitimate
+import. Rows are never deduplicated on import: two identical commissions are a
+legitimate pair, and duplicate detection belongs to the engine, which can explain
+its suspicion instead of silently deleting a movement (§8.5).
+
+Valid rows are imported even when others fail. The job is `completed` when at
+least one row was written and `failed` when none was; `rows_read`,
+`rows_imported`, the summary and the per-row error table carry the difference,
+because a `completed_with_errors` state would be a fifth status the
+specification did not ask for.
+
+The original file is stored privately under `IMPORT_STORAGE_DIR`, owner-readable
+only, and is never served by a route. Retry reads that original rather than
+asking the client to send it again, and only a job that wrote zero rows may be
+retried: re-running a partial import would duplicate what already succeeded. The
+storage protocol is the seam for the S3-compatible adapter; the local adapter is
+what the development and test environments use.
+
 ### Row-level security as a second layer
 
 Multi-tenancy is enforced in the backend on every request. PostgreSQL RLS is an
@@ -132,6 +167,7 @@ Deferred to the phases that own them, deliberately not stubbed here:
   same-site; the cookie scheme above deliberately assumes it stays same-site).
 - MFA for administrators and approvers (§11.1 calls it recommended, not required).
 - Password recovery and email delivery.
-- Object storage for original files (phase: imports).
+- Object storage for original files: the local private adapter exists; the
+  S3-compatible one and the retention policy belong to the deployment phase.
 - Redis/Celery — only if measured volume requires it.
 - Centralised logging, monitoring and backups (phase: deployment).

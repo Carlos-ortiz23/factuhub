@@ -16,6 +16,7 @@ from app.core.config import Settings
 from app.core.crypto import CredentialCipher
 from app.core.permissions import Permission, role_has_permission
 from app.db.session import get_session_factory
+from app.imports.storage import ImportStorage, LocalImportStorage
 from app.integrations.connectors import ConnectorFactory, build_connector
 from app.models import MembershipRole, Organization, User, UserSession
 from app.services import auth as auth_service
@@ -63,6 +64,13 @@ def get_connector_factory() -> ConnectorFactory:
     the endpoint.
     """
     return build_connector
+
+
+def get_import_storage(
+    settings: Annotated[Settings, Depends(get_app_settings)],
+) -> ImportStorage:
+    """Private storage for uploaded originals, overridable in tests."""
+    return LocalImportStorage(settings.import_storage_dir)
 
 
 @dataclass(frozen=True, slots=True)

@@ -71,6 +71,14 @@ class Settings(BaseSettings):
 
     local_storage_path: Path = Path("backend/var/storage")
 
+    #: Private directory for original import files. Never served by a route.
+    import_storage_dir: Path = REPO_ROOT / "backend" / "var" / "imports"
+
+    #: Bounds on an uploaded file. A statement bigger than this is either not a
+    #: statement or not something to parse in a request; both are refused.
+    import_max_bytes: Annotated[int, Field(ge=1024, le=100 * 1024 * 1024)] = 10 * 1024 * 1024
+    import_max_rows: Annotated[int, Field(ge=1, le=200_000)] = 50_000
+
     @field_validator("app_allowed_hosts", mode="before")
     @classmethod
     def _split_allowed_hosts(cls, value: object) -> object:
