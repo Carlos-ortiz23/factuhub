@@ -13,8 +13,10 @@ from sqlalchemy.orm import Session
 
 from app.api.cookies import CSRF_HEADER_NAME, csrf_cookie_name
 from app.core.config import Settings
+from app.core.crypto import CredentialCipher
 from app.core.permissions import Permission, role_has_permission
 from app.db.session import get_session_factory
+from app.integrations.connectors import ConnectorFactory, build_connector
 from app.models import MembershipRole, Organization, User, UserSession
 from app.services import auth as auth_service
 from app.services import organizations as organizations_service
@@ -44,6 +46,23 @@ def get_app_settings(request: Request) -> Settings:
     factory-built app can be configured without touching the environment.
     """
     return request.app.state.settings
+
+
+def get_credential_cipher(
+    settings: Annotated[Settings, Depends(get_app_settings)],
+) -> CredentialCipher:
+    """Build the cipher from the deployment key, failing loudly if it is invalid."""
+    return CredentialCipher.from_key(settings.credentials_encryption_key)
+
+
+def get_connector_factory() -> ConnectorFactory:
+    """The adapter builder, as a dependency tests can override.
+
+    Keeping this behind a dependency is what lets the connection test run against
+    a stand-in connector in the suite without any provider-specific test branch in
+    the endpoint.
+    """
+    return build_connector
 
 
 @dataclass(frozen=True, slots=True)
