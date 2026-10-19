@@ -11,7 +11,7 @@ from dataclasses import asdict
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import (
@@ -25,7 +25,14 @@ from app.api.scoping import (
     require_period_permission,
 )
 from app.core.permissions import Permission
-from app.models import MatchStatus, ReconciliationMatch, ReconciliationMatchItem
+from app.models import (
+    BankAccount,
+    MatchStatus,
+    Organization,
+    ReconciliationMatch,
+    ReconciliationMatchItem,
+)
+from app.reports.period_export import ReportHeader, build_period_workbook
 from app.schemas.reconciliation import (
     BalancesResponse,
     MatchItemResponse,
@@ -38,6 +45,7 @@ from app.schemas.reconciliation import (
     PeriodTransactionResponse,
     SuggestionRunResponse,
 )
+from app.services import audit
 from app.services import reconciliation as reconciliation_service
 
 router = APIRouter(tags=["reconciliation"])
@@ -74,6 +82,7 @@ def _as_match(match: ReconciliationMatch, items: list[ReconciliationMatchItem]) 
         status=match.status,
         reviewed_by=match.reviewed_by,
         reviewed_at=match.reviewed_at,
+        released=match.released,
         explanation=match.explanation_json,
         created_at=match.created_at,
         items=[
@@ -178,6 +187,79 @@ def get_summary(
         bank_transaction_count=bank_count,
         ledger_transaction_count=ledger_count,
         balances=BalancesResponse(**asdict(balances)),
+    )
+
+
+XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+@router.get(
+    "/periods/{period_id}/export",
+    summary="Download the period as an Excel workbook",
+    description=(
+        "Requires `read`. The workbook has four sheets: summary, movements, "
+        "pending movements and matches. Every text cell is written as text, so "
+        "a reference starting with `=` cannot become a formula."
+    ),
+    response_class=Response,
+    responses={200: {"content": {XLSX_MEDIA_TYPE: {}}}},
+)
+def export_period(
+    period_id: UUID,
+    context: Annotated[OrganizationContext, Depends(require_period_permission(Permission.READ))],
+    db: Annotated[Session, Depends(get_db_session)],
+) -> Response:
+    period = reconciliation_service.get_period(
+        db, organization_id=context.organization_id, period_id=period_id
+    )
+    if period is None:  # pragma: no cover - the dependency already 404s
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Period not found.")
+
+    account = db.get(BankAccount, period.bank_account_id)
+    organization = db.get(Organization, period.organization_id)
+    if account is None or organization is None:  # pragma: no cover - FK guarantees
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Period not found.")
+
+    balances = reconciliation_service.period_summary(
+        db, organization_id=context.organization_id, period=period
+    )
+    movements = reconciliation_service.all_period_movements(
+        db, organization_id=context.organization_id, period=period
+    )
+    matches = reconciliation_service.list_matches(db, period=period)
+    match_models = _build_matches(db, matches)
+
+    content = build_period_workbook(
+        period=PeriodResponse.model_validate(period),
+        header=ReportHeader(
+            organization_name=organization.name,
+            organization_tax_id=organization.tax_id,
+            bank_name=account.bank_name,
+            account_masked=account.account_number_masked,
+            currency=account.currency,
+        ),
+        balances=balances,
+        movements=movements,
+        matches=match_models,
+    )
+    audit.record(
+        db,
+        organization_id=context.organization_id,
+        user_id=context.user_id,
+        action="reconciliation_period.exported",
+        entity_type="reconciliation_period",
+        entity_id=period.id,
+        metadata={"movements": len(movements), "matches": len(matches)},
+    )
+    db.commit()
+
+    filename = (
+        f"conciliacion-{period.period_start.isoformat()}-{period.period_end.isoformat()}.xlsx"
+    )
+    return Response(
+        content=content,
+        media_type=XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
@@ -469,7 +551,12 @@ def reject_match(
 @router.post(
     "/matches/{match_id}/cancel",
     response_model=MatchResponse,
-    summary="Cancel a suggested match",
+    summary="Cancel a suggestion or undo a confirmation",
+    description=(
+        "Requires `reconcile`. Cancelling a **confirmed** match releases its "
+        "movements so they can be suggested again; it is the correction path for "
+        "a wrong confirmation. Reopening the period is not required."
+    ),
 )
 def cancel_match(
     match_id: UUID,

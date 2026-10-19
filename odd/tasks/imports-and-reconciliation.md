@@ -118,7 +118,7 @@ contradictory association; balance cases prepared with an accountant.
 | R2 | S1, S2, S3, S4 | Import pipeline: `import_jobs`, `import_row_errors`, `bank_transactions`, `ledger_transactions`; CSV/XLSX reader; explicit column mapping; exact money/date parsing; duplicate-file refusal; partial import with per-row errors; private file storage; retry of failed jobs; routes. | inline | done | 297 tests, ruff clean |
 | R3 | S11 | `reconciliation_periods` and `reconciliation_period_transactions`, creation, summary, transaction listing, submit/approve/reopen with role checks and locks. | inline | done | 19 API tests; migration `a01c4fdc5f36` |
 | R4 | S6, S7, S9 | Pure engine: normalizer, exact matcher, approximate scorer, duplicate candidates. No database access, so every rule is testable without a transaction. | inline | done | 47 engine tests; 344 total |
-| R5 | S8, S11 | Grouping (bounded), match persistence, suggestions, confirm/reject/cancel with row locks and duplicate/contradiction protection. | inline | done | 19 API tests; confirm locks movements and cancels alternatives |
+| R5 | S8, S11 | Grouping (bounded), match persistence, suggestions, confirm/reject/cancel with row locks and duplicate/contradiction protection. | inline | done | 24 API tests; confirm locks movements, cancels alternatives, and a confirmed match can be released |
 | R6 | S10 | Balances and period summary. Must be validated with an accountant before production use. | inline | done (assumption) | 7 balance tests; convention documented and warned |
 
 ## Log
@@ -293,8 +293,8 @@ unexplained difference. Approval uses that strict definition because this phase
 has no justification model; the specification's "unjustified differences" is
 narrower, and the conservative reading never approves what it cannot explain.
 
-Verification: **372 passed**; `ruff check` and `ruff format --check` clean;
-21 API tests and 7 balance tests. `alembic check` reports no drift. Advisory: `GET /matches/{id}` was added beyond
+Verification: **380 passed**; `ruff check` and `ruff format --check` clean;
+29 API tests and 7 balance tests. `alembic check` reports no drift. Advisory: `GET /matches/{id}` was added beyond
 §9.5 so the UI can refresh one match after a decision; recorded here like the
 imports listing.
 
@@ -318,3 +318,31 @@ imports listing.
   differences are **not modeled**: the accountant convention is still pending, so
   approval is stricter (all pending items must be zero). This is a documented
   gap, not a silent assumption.
+
+### L5 — reversible confirmations and Excel export (2026-10-19)
+
+Risk correction: a confirmed match is no longer irreversible.
+`POST /matches/{id}/cancel` accepts a confirmed match, marks it `released` and
+returns its movements to the available pool. Rejected suggestions remain
+rejected; alternatives that were auto-cancelled by a confirmation are marked
+with `auto_cancelled_by_match_id` and become eligible again once the confirmation
+is released. Migration `5bc654f7727d` adds the `released` column.
+
+Phase 6 export: `GET /periods/{id}/export` returns an `.xlsx` with four sheets
+(Resumen, Movimientos, Pendientes, Coincidencias). The workbook is built from the
+same balances and movement views as the JSON summary. Text cells are written
+with `data_type = "s"` even when they start with `=`, closing the formula
+injection path from an uploaded statement. The download is audited. Endpoint
+added beyond §9.5 because §13 phase 6 asks for an Excel export; recorded here.
+
+Remaining, deliberately not invented:
+
+- **Justified differences.** Approval is stricter than the specification until
+  the accountant defines which differences are acceptable. A free-text
+  justification model would be a product decision, not a technical one.
+- **True concurrent confirmation.** The service guard is tested by injecting a
+  confirmation that bypassed auto-cancellation, and the locks serialize the
+  race; the HTTP test harness still cannot run two committed transactions
+  concurrently.
+- **Duplicate suggestions surface.** The engine classifies duplicates, but §9
+  defines no endpoint for them; the reconciliation tray belongs to the UI phase.

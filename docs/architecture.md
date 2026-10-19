@@ -152,6 +152,30 @@ retried: re-running a partial import would duplicate what already succeeded. The
 storage protocol is the seam for the S3-compatible adapter; the local adapter is
 what the development and test environments use.
 
+### Reconciliation: a confirmation is reversible, approval is strict
+
+A suggestion is cheap; a confirmation moves money in the accountant's mind. The
+confirmation locks the match, the period and the movements, refuses a movement
+that someone else already confirmed, and cancels the suggested alternatives that
+shared it. Those alternatives are marked with the match that displaced them.
+
+A wrong confirmation must be correctable without a database console.
+`POST /matches/{id}/cancel` therefore accepts a confirmed match, sets
+`released = true` and makes its movements available again; a human rejection and
+an automatic cancellation remain remembered and are not offered afresh. The
+period does not need to be reopened for this.
+
+Approval requires zero pending movements, zero statement difference and zero
+unexplained difference. The specification forbids approving *unjustified*
+differences, which is narrower, but this phase has no justification model and
+inventing one before agreeing the convention with an accountant would hide the
+gap instead of exposing it.
+
+The Excel export is built from the same summary and movement views as the JSON
+route, so the file and the screen cannot disagree. Every text cell is forced to
+the `s` data type: a reference or description starting with `=` comes from an
+uploaded file and must never become a formula when the workbook is opened.
+
 ### Row-level security as a second layer
 
 Multi-tenancy is enforced in the backend on every request. PostgreSQL RLS is an

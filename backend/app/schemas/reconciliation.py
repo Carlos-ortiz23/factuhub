@@ -110,6 +110,7 @@ class MatchResponse(BaseModel):
     status: MatchStatus
     reviewed_by: UUID | None
     reviewed_at: datetime | None
+    released: bool
     explanation: dict[str, Any]
     created_at: datetime
     items: list[MatchItemResponse]

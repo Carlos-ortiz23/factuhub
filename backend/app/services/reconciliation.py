@@ -171,6 +171,13 @@ def period_movements(
     limit: int,
     offset: int,
 ) -> tuple[list[PeriodMovementView], int]:
+    views = all_period_movements(db, organization_id=organization_id, period=period)
+    return views[offset : offset + limit], len(views)
+
+
+def all_period_movements(
+    db: Session, *, organization_id: UUID, period: ReconciliationPeriod
+) -> list[PeriodMovementView]:
     banks, ledgers = _movements_in_period(db, organization_id=organization_id, period=period)
     match_map = _match_map(db, period.id)
 
@@ -209,8 +216,7 @@ def period_movements(
         )
 
     views.sort(key=lambda view: (view.transaction_date, view.side.value, str(view.id)))
-    total = len(views)
-    return views[offset : offset + limit], total
+    return views
 
 
 def period_counts(
@@ -439,6 +445,7 @@ def confirm_match(
         other.explanation_json = {
             **other.explanation_json,
             "cancelled_reason": "another match sharing these movements was confirmed",
+            "auto_cancelled_by_match_id": str(match.id),
         }
 
     audit.record(
@@ -474,14 +481,37 @@ def reject_match(
 def cancel_match(
     db: Session, *, organization_id: UUID, actor_id: UUID, match_id: UUID
 ) -> ReconciliationMatch:
-    return _decide(
+    """Cancel a suggestion, or undo a confirmation.
+
+    Undoing a confirmation is the correction path: a wrong match must be
+    reversible without touching the database. The period stays as it is; only
+    the match is released and its movements become available for a new
+    suggestion. Reopening the period is not required for this.
+    """
+    match = db.get(ReconciliationMatch, match_id, with_for_update=True)
+    if match is None or match.organization_id != organization_id:
+        raise MatchNotFoundError("Match not found.")
+    if match.status is MatchStatus.CONFIRMED:
+        match.released = True
+        action = "reconciliation.match_confirmation_cancelled"
+    elif match.status is MatchStatus.SUGGESTED:
+        action = "reconciliation.match_cancelled"
+    else:
+        raise MatchNotActionableError("Only a suggested or confirmed match can be cancelled.")
+    match.status = MatchStatus.CANCELLED
+    match.reviewed_by = actor_id
+    match.reviewed_at = datetime.now(UTC)
+    audit.record(
         db,
         organization_id=organization_id,
-        actor_id=actor_id,
-        match_id=match_id,
-        status=MatchStatus.CANCELLED,
-        action="reconciliation.match_cancelled",
+        user_id=actor_id,
+        action=action,
+        entity_type="reconciliation_match",
+        entity_id=match.id,
+        metadata={"period_id": str(match.period_id)},
     )
+    db.flush()
+    return match
 
 
 def submit_review(
@@ -716,6 +746,13 @@ def _rejected_item_sets(db: Session, period_id: UUID) -> set[frozenset[tuple[str
     ).all()
     grouped: dict[UUID, list[tuple[str, UUID]]] = {}
     for item, match in rows:
+        if match.status is MatchStatus.CANCELLED and (
+            match.released or match.explanation_json.get("auto_cancelled_by_match_id")
+        ):
+            # These two cancellations are consequences of a confirmation, not a
+            # human rejection. Once the confirmation is undone, they may be
+            # offered again.
+            continue
         members = grouped.setdefault(match.id, [])
         if item.bank_transaction_id is not None:
             members.append(("bank", item.bank_transaction_id))

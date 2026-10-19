@@ -9,13 +9,18 @@ happy path is a spreadsheet with extra steps.
 from __future__ import annotations
 
 import json
+from io import BytesIO
 from typing import Any
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
+from openpyxl import load_workbook
+from sqlalchemy import select
 
 from app.api.deps import get_import_storage
 from app.imports.storage import LocalImportStorage
+from app.models import AuditLog
 
 pytestmark = pytest.mark.integration
 
@@ -560,3 +565,194 @@ def test_reopening_requires_the_approval_permission(auth_client: TestClient) -> 
 
     assert reopened.status_code == 403
     assert submitted.status_code == 403
+
+
+def test_a_confirmed_match_can_be_cancelled_and_offered_again(
+    auth_client: TestClient,
+) -> None:
+    organization = company(auth_client)
+    account = bank_account(auth_client, organization["id"])
+    import_pair(auth_client, organization["id"], account["id"])
+    period = create_period(auth_client, account["id"]).json()
+    match = generate(auth_client, period["id"])["matches"][0]
+    auth_client.post(f"{MATCHES}/{match['id']}/confirm", headers=csrf_headers(auth_client))
+
+    cancelled = auth_client.post(
+        f"{MATCHES}/{match['id']}/cancel", headers=csrf_headers(auth_client)
+    )
+
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["status"] == "cancelled"
+    assert cancelled.json()["released"] is True
+    summary = auth_client.get(f"{PERIODS}/{period['id']}/summary").json()
+    assert summary["balances"]["pending_bank_count"] == 1
+    assert summary["balances"]["pending_ledger_count"] == 1
+
+    again = generate(auth_client, period["id"])
+
+    assert again["created"] == 1
+    assert again["matches"][0]["status"] == "suggested"
+
+
+def test_undoing_a_confirmation_reoffers_the_cancelled_alternatives(
+    auth_client: TestClient,
+) -> None:
+    organization = company(auth_client)
+    account = bank_account(auth_client, organization["id"])
+    bank = (
+        "Fecha;Descripción;Débito;Crédito;Referencia\n"
+        "01/02/2026;Abono cliente;;1.000,00;REF-1\n"
+        "01/02/2026;Abono cliente;;1.000,00;REF-1\n"
+    ).encode()
+    import_pair(auth_client, organization["id"], account["id"], bank=bank)
+    period = create_period(auth_client, account["id"]).json()
+    first, second = generate(auth_client, period["id"])["matches"]
+    auth_client.post(f"{MATCHES}/{first['id']}/confirm", headers=csrf_headers(auth_client))
+    after_confirm = auth_client.get(f"{PERIODS}/{period['id']}/matches").json()["matches"]
+    assert {row["id"]: row["status"] for row in after_confirm}[second["id"]] == "cancelled"
+
+    auth_client.post(f"{MATCHES}/{first['id']}/cancel", headers=csrf_headers(auth_client))
+
+    again = generate(auth_client, period["id"])
+
+    assert again["created"] == 2
+
+
+def test_confirming_a_movement_confirmed_elsewhere_is_refused(
+    auth_client: TestClient, db_session
+) -> None:
+    from uuid import UUID
+
+    from app.models import MatchStatus, ReconciliationMatch
+
+    organization = company(auth_client)
+    account = bank_account(auth_client, organization["id"])
+    bank = (
+        "Fecha;Descripción;Débito;Crédito;Referencia\n"
+        "01/02/2026;Abono cliente;;1.000,00;REF-1\n"
+        "01/02/2026;Abono cliente;;1.000,00;REF-1\n"
+    ).encode()
+    import_pair(auth_client, organization["id"], account["id"], bank=bank)
+    period = create_period(auth_client, account["id"]).json()
+    first, second = generate(auth_client, period["id"])["matches"]
+
+    # Simulate a confirmation made elsewhere that the auto-cancellation did not
+    # see (for example, a concurrent transaction that committed first).
+    row = db_session.get(ReconciliationMatch, UUID(first["id"]))
+    assert row is not None
+    row.status = MatchStatus.CONFIRMED
+    db_session.flush()
+
+    response = auth_client.post(
+        f"{MATCHES}/{second['id']}/confirm", headers=csrf_headers(auth_client)
+    )
+
+    assert response.status_code == 409
+    assert "already confirmed" in response.json()["detail"]
+
+
+def _summary_value(workbook, label: str):
+    sheet = workbook["Resumen"]
+    for row in sheet.iter_rows(min_col=1, max_col=2):
+        if row[0].value == label:
+            return row[1].value
+    raise AssertionError(f"label not found in summary: {label}")
+
+
+def test_the_period_exports_as_an_excel_workbook(auth_client: TestClient) -> None:
+    organization = company(auth_client)
+    account = bank_account(auth_client, organization["id"])
+    import_pair(auth_client, organization["id"], account["id"])
+    period = create_period(auth_client, account["id"]).json()
+    match = generate(auth_client, period["id"])["matches"][0]
+    auth_client.post(f"{MATCHES}/{match['id']}/confirm", headers=csrf_headers(auth_client))
+
+    response = auth_client.get(f"{PERIODS}/{period['id']}/export")
+
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    assert (
+        'filename="conciliacion-2026-02-01-2026-02-28.xlsx"'
+        in response.headers["content-disposition"]
+    )
+
+    workbook = load_workbook(BytesIO(response.content), data_only=False)
+    assert workbook.sheetnames == ["Resumen", "Movimientos", "Pendientes", "Coincidencias"]
+    assert _summary_value(workbook, "Empresa") == "Distribuidora El Roble S.A.S."
+    assert _summary_value(workbook, "Saldo final calculado (banco)") == 1000.0
+    assert _summary_value(workbook, "Diferencia no explicada") == 0.0
+    assert _summary_value(workbook, "Conciliado") == "Sí"
+
+    movements = workbook["Movimientos"]
+    assert movements.max_row == 5  # title, header, bank and ledger rows
+    assert movements.cell(row=4, column=1).value == "Banco"
+    assert movements.cell(row=4, column=3).value == 1000.0
+
+    matches = workbook["Coincidencias"]
+    assert matches.max_row == 4
+    assert matches.cell(row=4, column=2).value == "Exacta"
+    assert matches.cell(row=4, column=4).value == "Confirmada"
+
+    pending = workbook["Pendientes"]
+    assert pending.max_row == 3  # title and header, no pending movement
+
+
+def test_the_export_keeps_formula_like_text_as_text(auth_client: TestClient) -> None:
+    organization = company(auth_client)
+    account = bank_account(auth_client, organization["id"])
+    bank = (
+        "Fecha;Descripción;Débito;Crédito;Referencia\n01/02/2026;=1+1;;1.000,00;REF-1\n"
+    ).encode()
+    import_pair(auth_client, organization["id"], account["id"], bank=bank)
+    period = create_period(auth_client, account["id"]).json()
+
+    response = auth_client.get(f"{PERIODS}/{period['id']}/export")
+
+    workbook = load_workbook(BytesIO(response.content), data_only=False)
+    sheet = workbook["Movimientos"]
+    description = sheet.cell(row=4, column=6)
+    assert description.value == "=1+1"
+    assert description.data_type == "s"
+
+
+def test_the_export_records_the_download_in_the_audit_trail(
+    auth_client: TestClient, db_session
+) -> None:
+    organization = company(auth_client)
+    account = bank_account(auth_client, organization["id"])
+    period = create_period(auth_client, account["id"]).json()
+
+    auth_client.get(f"{PERIODS}/{period['id']}/export")
+
+    entry = db_session.scalar(
+        select(AuditLog).where(
+            AuditLog.action == "reconciliation_period.exported",
+            AuditLog.entity_id == UUID(period["id"]),
+        )
+    )
+    assert entry is not None
+
+
+def test_a_stranger_cannot_export_a_period(auth_client: TestClient) -> None:
+    organization = company(auth_client)
+    account = bank_account(auth_client, organization["id"])
+    period = create_period(auth_client, account["id"]).json()
+    stranger = sign_in(auth_client, "intruso@example.com")
+
+    response = stranger.get(f"{PERIODS}/{period['id']}/export")
+
+    assert response.status_code == 404
+
+
+def test_a_viewer_can_export_the_period(auth_client: TestClient) -> None:
+    organization = company(auth_client)
+    account = bank_account(auth_client, organization["id"])
+    period = create_period(auth_client, account["id"]).json()
+    add_member(auth_client, organization["id"], "exporta@example.com", "viewer")
+    viewer = sign_in(auth_client, "exporta@example.com")
+
+    response = viewer.get(f"{PERIODS}/{period['id']}/export")
+
+    assert response.status_code == 200

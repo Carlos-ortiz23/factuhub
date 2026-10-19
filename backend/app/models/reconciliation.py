@@ -19,6 +19,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     Date,
     DateTime,
@@ -215,6 +216,10 @@ class ReconciliationMatch(Base, UuidPrimaryKeyMixin, CreatedAtMixin):
         nullable=True,
     )
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # True when a confirmation was undone. The movements become available again
+    # and the combination may be suggested afresh; a rejected suggestion stays
+    # rejected. The flag keeps those two cancellations distinguishable.
+    released: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     explanation_json: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
