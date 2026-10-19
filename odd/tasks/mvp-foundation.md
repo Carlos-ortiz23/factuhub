@@ -215,11 +215,13 @@ Second, more explicit form (2026-10-19):
 
 Interpretation, bounded by the specification's own rules: the platform exposes a
 **provider catalogue** served by the backend (never hardcoded in the frontend),
-and the choice is made from the Configuración section. World Office is the first
-implementation; other Colombian providers (Siigo, Allegra, and others added
-later) appear in the catalogue as *not yet available* rather than as a working
-integration, because spec rule 11 forbids simulating a connection that has not
-been verified.
+and the choice is made from the Configuración section. The initial list is
+exactly three — World Office, Siigo and Alegra — as the user settled it on
+2026-10-19 ("Por ahora entonces 3, siigo, world office y Alegra"). World Office
+is the first *implementation*; the other two appear in the catalogue as *not yet
+available* rather than as a working integration, because spec rule 11 forbids
+simulating a connection that has not been verified. The brand is spelled
+**Alegra** (alegra.co), verified 2026-10-19.
 
 Acceptance criteria:
 
@@ -234,9 +236,9 @@ Acceptance criteria:
 - A connection cannot be reported as reviewed or implemented without naming the
   evidence that supports the claim. This is enforced by construction in
   `app/integrations/registry.py`, not by convention.
-- The list of "las más usadas" is market knowledge, not something to invent: the
-  three the user named are present today, and the rest are added when the user
-  or a verifiable source names them.
+- The catalogue contains exactly the three providers the user approved; a fourth
+  is added only when the user asks for it, with its brand spelling verified
+  against the vendor's own site rather than inferred from how it was typed.
 
 ## Tasks
 
@@ -413,3 +415,24 @@ answer to "puedo conectar Siigo hoy": todavía no.
 
 Open input, asked to the user: the list of "las más usadas". That is market
 knowledge about their own clients, and inventing it would be worse than asking.
+
+### L10 — The initial list is exactly three, and the third brand is Alegra (2026-10-19)
+
+Verbatim user decision:
+
+> Por ahora entoces 3, siigo, world office y Alegra
+
+Two corrections applied:
+
+1. **The list is closed at three.** S10 no longer says "and others added later";
+   the catalogue holds World Office, Siigo and Alegra, and the test now asserts
+   equality rather than a superset, so a fourth entry cannot appear silently.
+2. **The brand is Alegra, not Allegra.** The user wrote both spellings across two
+   messages, so the spelling was verified against the vendor's own site instead
+   of guessing: https://www.alegra.co/colombia titles itself "Alegra Software".
+   Code changed from `allegra` to `alegra`, display name from "Allegra" to
+   "Alegra". Cheap now, when nothing is persisted; expensive later, when a code
+   is stored in a database row and sent by the interface.
+
+The earlier "Allegra" mentions in L9 are left untouched as history and are
+superseded by this entry.

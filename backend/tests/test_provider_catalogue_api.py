@@ -23,7 +23,7 @@ def test_the_catalogue_lists_the_requested_providers(auth_client: TestClient) ->
 
     assert response.status_code == 200
     codes = [provider["code"] for provider in response.json()["providers"]]
-    assert codes == ["world_office", "siigo", "allegra"]
+    assert codes == ["world_office", "siigo", "alegra"]
 
 
 def test_the_catalogue_states_plainly_that_nothing_is_connectable_yet(
@@ -32,10 +32,10 @@ def test_the_catalogue_states_plainly_that_nothing_is_connectable_yet(
     providers = {p["code"]: p for p in auth_client.get(CATALOGUE).json()["providers"]}
 
     assert all(provider["connectable"] is False for provider in providers.values())
-    # Siigo and Allegra are listed on purpose but claim nothing: no connection
+    # Siigo and Alegra are listed on purpose but claim nothing: no connection
     # mode is published for them until their contracts have been reviewed.
     assert providers["siigo"]["connections"] == []
-    assert providers["allegra"]["connections"] == []
+    assert providers["alegra"]["connections"] == []
 
 
 def test_a_reviewed_connection_carries_the_evidence_that_supports_it(

@@ -100,10 +100,16 @@ WORLD_OFFICE = AccountingProvider(
 
 SIIGO = AccountingProvider(code="siigo", display_name="Siigo")
 
-ALLEGRA = AccountingProvider(code="allegra", display_name="Allegra")
+#: Brand verified on 2026-10-19 at https://www.alegra.co/colombia ("Alegra
+#: Software"), spelled with a single g. The identifier is lowercase like the rest
+#: of the catalogue and is what the interface sends back when connecting.
+ALEGRA = AccountingProvider(code="alegra", display_name="Alegra")
 
 #: Everything the interface may offer. Order is presentation order.
-CATALOGUE: tuple[AccountingProvider, ...] = (WORLD_OFFICE, SIIGO, ALLEGRA)
+#: Deliberately three: the client settled the initial list on 2026-10-19
+#: ("Por ahora entonces 3, siigo, world office y Alegra"). Adding a fourth is a
+#: one-line change here plus its entry; it never requires a frontend change.
+CATALOGUE: tuple[AccountingProvider, ...] = (WORLD_OFFICE, SIIGO, ALEGRA)
 
 
 def get_provider(code: str) -> AccountingProvider | None:

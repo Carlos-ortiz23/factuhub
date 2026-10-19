@@ -46,10 +46,12 @@ def test_every_provider_code_is_unique_and_url_safe() -> None:
 
 
 def test_the_providers_the_client_named_are_in_the_catalogue() -> None:
-    # The requirement was explicit: Siigo, World Office, "allegra etc... las que
-    # existen en colombia y mas usadas". A missing one is a missing requirement.
-    assert {provider.code for provider in CATALOGUE} >= {"world_office", "siigo", "allegra"}
-    assert get_provider("allegra").display_name == "Allegra"
+    # The requirement was explicit, and the initial list was settled on
+    # 2026-10-19: "Por ahora entonces 3, siigo, world office y Alegra". A missing
+    # one is a missing requirement.
+    assert {provider.code for provider in CATALOGUE} == {"world_office", "siigo", "alegra"}
+    # The brand is Alegra (alegra.co), with a single g.
+    assert get_provider("alegra").display_name == "Alegra"
 
 
 def test_world_office_declares_the_two_modes_that_were_actually_reviewed() -> None:

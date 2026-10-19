@@ -1,7 +1,7 @@
 """Integration packages."""
 
 from app.integrations.registry import (
-    ALLEGRA,
+    ALEGRA,
     CATALOGUE,
     SIIGO,
     WORLD_OFFICE,
@@ -13,7 +13,7 @@ from app.integrations.registry import (
 )
 
 __all__ = [
-    "ALLEGRA",
+    "ALEGRA",
     "CATALOGUE",
     "SIIGO",
     "WORLD_OFFICE",
