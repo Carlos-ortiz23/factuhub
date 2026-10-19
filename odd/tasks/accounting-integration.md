@@ -257,3 +257,10 @@ still unpublished), any UI, and key rotation.
   been exercised. The flow is real and its per-company status tells the truth,
   but the provider catalogue stays at `contract_reviewed` and
   `connectable = false` until that exchange happens.
+
+#### Native review decision (2026-10-19)
+
+The native review of `ce1d99f..9f545fe` (lenses: risk, resilience, readability)
+was offered and the user chose **"Skip this time"** (`action: declined`,
+`consent: declined_this_candidate`). No review record was created; the
+independent verifier's result above stands, and future reviews stay enabled.
