@@ -417,7 +417,7 @@ async def test_the_connection_check_reports_failure_without_raising() -> None:
 
     async with _client(handler, max_retries=0) as client:
         connector = SiigoConnector(client)
-        assert await connector.test_connection() is False
+        assert (await connector.test_connection()).ok is False
 
 
 async def test_the_connection_check_succeeds_on_an_authenticated_read() -> None:
@@ -431,7 +431,7 @@ async def test_the_connection_check_succeeds_on_an_authenticated_read() -> None:
 
     async with _client(handler) as client:
         connector = SiigoConnector(client)
-        assert await connector.test_connection() is True
+        assert (await connector.test_connection()).ok is True
 
     assert paths == ["/auth", "/v1/document-types"]
 
@@ -512,7 +512,7 @@ async def test_the_connection_check_returns_false_when_the_network_is_down() -> 
         raise httpx.ConnectError("network down")
 
     async with _client(handler, max_retries=0) as client:
-        assert await SiigoConnector(client).test_connection() is False
+        assert (await SiigoConnector(client).test_connection()).ok is False
 
 
 async def test_authentication_failures_are_retried_a_bounded_number_of_times() -> None:

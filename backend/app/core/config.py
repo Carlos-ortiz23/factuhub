@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     app_env: Environment = "development"
     app_debug: bool = False
     app_secret_key: SecretStr
+    #: Encrypts provider credentials at rest. Deliberately separate from
+    #: `app_secret_key`: rotating sessions must not make stored credentials
+    #: unreadable, and rotating this key must not sign everybody out.
+    credentials_encryption_key: SecretStr
     app_allowed_hosts: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["localhost", "127.0.0.1"]
     )
@@ -90,6 +94,19 @@ class Settings(BaseSettings):
     def _require_long_secret(cls, value: SecretStr) -> SecretStr:
         if len(value.get_secret_value()) < MIN_SECRET_LENGTH:
             raise ValueError(f"APP_SECRET_KEY must be at least {MIN_SECRET_LENGTH} characters long")
+        return value
+
+    @field_validator("credentials_encryption_key")
+    @classmethod
+    def _require_valid_fernet_key(cls, value: SecretStr) -> SecretStr:
+        # Imported here to keep the crypto module free of any dependency on the
+        # settings module (it only needs the key string).
+        from app.core.crypto import CredentialCipher
+
+        try:
+            CredentialCipher.from_key(value)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
         return value
 
     @model_validator(mode="after")

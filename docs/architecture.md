@@ -92,6 +92,31 @@ the number of instances. The trade-off is deliberate and visible: someone who
 knows an address can lock it out for fifteen minutes, which is why the window is
 fixed (never sliding) and short.
 
+### Provider credentials at rest
+
+A company's accounting credentials live in `provider_credentials`, one row per
+`(organization, provider, mode)`, and never in the environment: the platform's
+own token cannot represent which company is asking, and §11.3 asks for the
+company's credentials to be encrypted at rest. The column holds a Fernet token
+(AES-128-CBC plus an HMAC-SHA256 tag), so a modified ciphertext is rejected
+rather than decrypted into plausible garbage.
+
+The key is `CREDENTIALS_ENCRYPTION_KEY`, deliberately separate from
+`APP_SECRET_KEY`: rotating sessions must not make stored credentials unreadable,
+and rotating credentials must not sign everybody out. The token's plaintext also
+records the `(organization_id, provider)` it was created for, so a row copied to
+another company fails authentication instead of decrypting the wrong tenant's
+credentials. Plaintext exists only between decryption and the adapter call.
+
+The connection status is an observation. Saving credentials marks the row
+`untested`; only a real call to the provider moves it to `connected` or `error`,
+and the sanitized reason is stored for the company to read. Providers in the
+catalogue without an adapter are refused with `409` instead of accepting
+credentials nobody will ever use. Responses are built from a model that has no
+field capable of holding a credential, and the app's validation handler strips
+FastAPI's `input` echo so a rejected payload cannot write the secret into an
+error body.
+
 ### Row-level security as a second layer
 
 Multi-tenancy is enforced in the backend on every request. PostgreSQL RLS is an

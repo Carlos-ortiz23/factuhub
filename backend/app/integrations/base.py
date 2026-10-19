@@ -53,13 +53,26 @@ class ConnectorCapabilities:
     notes: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class ConnectionCheck:
+    """The observed result of a connection test.
+
+    A plain `bool` would force the interface to say "it failed" without saying
+    why. `error` is already sanitized by the adapter and is safe to store and to
+    show to the company.
+    """
+
+    ok: bool
+    error: str | None = None
+
+
 @runtime_checkable
 class AccountingConnector(Protocol):
     """The operations the reconciliation engine needs from any provider."""
 
     capabilities: ConnectorCapabilities
 
-    async def test_connection(self) -> bool:
+    async def test_connection(self) -> ConnectionCheck:
         """Whether the stored credentials can reach the provider right now."""
         ...
 

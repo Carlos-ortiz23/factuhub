@@ -6,6 +6,7 @@ from datetime import date
 
 from app.integrations.base import (
     CapabilityNotSupported,
+    ConnectionCheck,
     ConnectorCapabilities,
     LedgerMovement,
 )
@@ -24,17 +25,19 @@ class SiigoConnector:
         self._client = client
         self.capabilities = SIIGO_CAPABILITIES
 
-    async def test_connection(self) -> bool:
+    async def test_connection(self) -> ConnectionCheck:
         """A cheap authenticated read, not just a token request.
 
         A token can be issued for a user who cannot read anything; asking for the
         invoice document types proves the credentials reach real company data.
+        The failure is returned, not raised: a wrong credential is an expected
+        state the interface must be able to show.
         """
         try:
             await self._client.get_json("/v1/document-types", params={"type": "FV"})
-        except SiigoError:
-            return False
-        return True
+        except SiigoError as exc:
+            return ConnectionCheck(ok=False, error=str(exc))
+        return ConnectionCheck(ok=True)
 
     async def list_bank_accounts(self) -> list[dict]:
         raise CapabilityNotSupported(SIIGO_CAPABILITIES.notes)

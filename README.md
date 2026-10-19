@@ -34,6 +34,8 @@ not implemented yet. See `odd/tasks/` for the live task document.
 ```bash
 # 1. Environment file (never committed)
 cp env.example .env      # then replace every value marked change-me
+# CREDENTIALS_ENCRYPTION_KEY is a Fernet key; generate one with:
+#   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 
 # 2. Databases: development on :5432, tests on :5433
 docker compose up -d

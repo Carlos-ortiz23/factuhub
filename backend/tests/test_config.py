@@ -6,6 +6,8 @@ value in production, and the database URL must use the synchronous psycopg
 driver that the SQLAlchemy engine expects.
 """
 
+import base64
+
 import pytest
 from pydantic import ValidationError
 
@@ -13,12 +15,15 @@ from app.core.config import Settings
 
 VALID_SECRET = "a" * 64
 VALID_DATABASE_URL = "postgresql+psycopg://user:pass@localhost:5432/db"
+#: A syntactically valid Fernet key (32 bytes, url-safe base64). Not a secret.
+VALID_CREDENTIALS_KEY = base64.urlsafe_b64encode(b"0" * 32).decode()
 
 
 def build_settings(**overrides: object) -> Settings:
     """Build settings from explicit values, ignoring any local `.env` file."""
     values: dict[str, object] = {
         "app_secret_key": VALID_SECRET,
+        "credentials_encryption_key": VALID_CREDENTIALS_KEY,
         "database_url": VALID_DATABASE_URL,
         "_env_file": None,
     }
@@ -31,6 +36,22 @@ def test_defaults_to_development_environment() -> None:
 
     assert settings.app_env == "development"
     assert settings.app_debug is False
+
+
+def test_the_credentials_key_must_be_a_fernet_key() -> None:
+    # A typo here would only surface on the first connection save, long after
+    # deployment; startup is the right place to refuse it.
+    with pytest.raises(ValidationError):
+        build_settings(credentials_encryption_key="not-a-fernet-key")
+
+
+def test_the_credentials_key_is_independent_from_the_app_secret() -> None:
+    settings = build_settings()
+
+    assert (
+        settings.credentials_encryption_key.get_secret_value()
+        != settings.app_secret_key.get_secret_value()
+    )
 
 
 def test_allowed_hosts_accepts_comma_separated_env_value() -> None:
