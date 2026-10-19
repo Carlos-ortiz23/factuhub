@@ -50,6 +50,21 @@ class Settings(BaseSettings):
 
     next_public_api_base_url: str = "http://localhost:8000"
 
+    #: How long an issued session stays valid. One working day plus margin: an
+    #: accountant reconciling a month-end close must not be signed out mid-task,
+    #: and a stolen token must not stay useful indefinitely.
+    session_ttl_hours: Annotated[int, Field(ge=1, le=720)] = 12
+
+    #: Cookie name for the session token. Prefixed so it cannot be confused with
+    #: a session cookie from another application on the same host.
+    session_cookie_name: str = "factuhub_session"
+
+    #: `None` means "decide from the environment": Secure everywhere except
+    #: plain-HTTP local development, where a Secure cookie would simply never be
+    #: sent and the bug would look like a broken login. Set explicitly to
+    #: override.
+    session_cookie_secure: bool | None = None
+
     world_office_base_url: str = "https://api.worldoffice.cloud"
     world_office_token: SecretStr | None = None
     world_office_company_id: str | None = None
@@ -91,6 +106,18 @@ class Settings(BaseSettings):
         ):
             raise ValueError("APP_SECRET_KEY still holds the template placeholder value")
         return self
+
+    @property
+    def session_cookie_is_secure(self) -> bool:
+        """Whether the session cookie must carry the `Secure` flag.
+
+        Deriving it from the environment by default means production cannot be
+        shipped with a cookie that travels over plain HTTP just because nobody
+        remembered to flip a flag.
+        """
+        if self.session_cookie_secure is not None:
+            return self.session_cookie_secure
+        return self.app_env == "production"
 
 
 @lru_cache(maxsize=1)

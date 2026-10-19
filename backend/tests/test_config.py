@@ -52,3 +52,30 @@ def test_placeholder_secret_is_rejected_in_production() -> None:
 def test_short_secret_is_rejected() -> None:
     with pytest.raises(ValidationError):
         build_settings(app_secret_key="too-short")
+
+
+def test_session_cookie_is_secure_in_production_and_not_in_development() -> None:
+    # Derived from the environment on purpose: shipping production with a cookie
+    # that travels over plain HTTP must not depend on somebody remembering a
+    # flag in a deployment file.
+    assert build_settings(app_env="production").session_cookie_is_secure is True
+    assert build_settings(app_env="development").session_cookie_is_secure is False
+
+
+def test_an_explicit_cookie_secure_setting_wins_over_the_environment() -> None:
+    assert build_settings(
+        app_env="development", session_cookie_secure=True
+    ).session_cookie_is_secure
+    assert not build_settings(
+        app_env="production", session_cookie_secure=False
+    ).session_cookie_is_secure
+
+
+@pytest.mark.parametrize("ttl", [0, 721])
+def test_the_session_lifetime_must_stay_within_sane_bounds(ttl: int) -> None:
+    with pytest.raises(ValidationError):
+        build_settings(session_ttl_hours=ttl)
+
+
+def test_the_session_lifetime_defaults_to_one_working_day() -> None:
+    assert build_settings().session_ttl_hours == 12

@@ -104,7 +104,7 @@ def upgrade() -> None:
             ondelete="RESTRICT",
         ),
         sa.ForeignKeyConstraint(
-            ["user_id"], ["users.id"], name=op.f("fk_audit_logs_user_id_users"), ondelete="SET NULL"
+            ["user_id"], ["users.id"], name=op.f("fk_audit_logs_user_id_users"), ondelete="RESTRICT"
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_audit_logs")),
     )

@@ -45,9 +45,14 @@ class AuditLog(Base):
     )
 
     # Nullable for actions performed by the system rather than by a person.
+    #
+    # RESTRICT, not SET NULL: an FK cascade would silently rewrite history
+    # behind the append-only trigger's back, and "quién aprobó esto" must not
+    # become "nobody" because an account was deleted. People are deactivated
+    # (`is_active = false`), never erased.
     user_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True),
-        ForeignKey("users.id", ondelete="SET NULL"),
+        ForeignKey("users.id", ondelete="RESTRICT"),
         nullable=True,
     )
 

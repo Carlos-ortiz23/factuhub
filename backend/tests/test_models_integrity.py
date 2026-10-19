@@ -99,6 +99,30 @@ def test_audit_log_metadata_defaults_to_an_empty_object(db_session: Session) -> 
     assert metadata_value == {}
 
 
+def test_a_user_with_audit_history_cannot_be_deleted(db_session: Session) -> None:
+    organization = create_organization(db_session)
+    user = create_user(db_session)
+    db_session.add(
+        AuditLog(
+            organization_id=organization.id,
+            user_id=user.id,
+            action="membership.granted",
+            entity_type="organization_member",
+            entity_id=organization.id,
+        )
+    )
+    db_session.flush()
+
+    # The alternative — `ON DELETE SET NULL` — would have quietly rewritten the
+    # audit row to "no user did this", which is the silent modification of
+    # history the specification forbids. Deactivating the account is the
+    # supported way to remove someone's access.
+    with pytest.raises(IntegrityError), db_session.begin_nested():
+        db_session.execute(text("DELETE FROM users WHERE id = :user_id"), {"user_id": user.id})
+
+    assert db_session.execute(text("SELECT count(*) FROM users")).scalar_one() == 1
+
+
 def test_audit_log_rows_cannot_be_updated(db_session: Session) -> None:
     organization = create_organization(db_session)
     db_session.add(

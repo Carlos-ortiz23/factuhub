@@ -97,6 +97,12 @@ Verbatim from the specification (§7.11):
 "The history must not be silently modified" is enforced at the database level:
 an append-only trigger rejects `UPDATE` and `DELETE` on `audit_logs`.
 
+Consequently both foreign keys on `audit_logs` are `ON DELETE RESTRICT`, not
+`CASCADE` and not `SET NULL`. Deleting a company or a person who has history is
+refused by the database; the `SET NULL` alternative would have quietly rewritten
+"who approved this" into "nobody", which is precisely the silent modification
+the specification forbids. People are deactivated, never erased.
+
 ### S5 — Session security
 
 Verbatim from the specification (§11.1):
@@ -107,6 +113,14 @@ Verbatim from the specification (§11.1):
 > - Recuperación de acceso segura.
 > - MFA recomendado para administradores y aprobadores.
 > - Limitación de intentos de autenticación.
+
+**Assumption, flagged as such:** §7's model list has no `sessions` table, and
+none is possible without one. A signed stateless token cannot be revoked, and
+this platform must be able to end access immediately when someone is removed
+from a company or deactivated. Sessions are therefore rows: the token is stored
+as a SHA-256 digest, and the server checks the deadline, the revocation flag and
+the account's `is_active` on every authenticated request. The cost is one
+indexed lookup per request; the benefit is that "quitale el acceso" means now.
 
 ### S6 — Authorization and row-level security
 
@@ -172,14 +186,17 @@ Verbatim from the specification (§17):
 | ID | Spec | Task | Route | Status | Evidence |
 | --- | --- | --- | --- | --- | --- |
 | A1 | S2, S3, S4, S7 | Domain models: `organizations`, `users`, `organization_members`, `audit_logs` | inline | done | `app/models/*.py`; 4 tables created by revision `6292f9b04939` |
-| A2 | S4, S7 | Migration with integrity constraints, indexes and the append-only audit trigger | inline | done | `migrations/versions/20261019_1626_6292f9b04939_*.py`; upgrade/downgrade round trip proven on the dev database; trigger present in `pg_trigger` |
-| A3 | S5 | Password hashing (argon2) and the session token primitive | inline | in progress | — |
-| A3 | S5 | Password hashing and session issuance (argon2, HttpOnly cookie) | inline | pending | — |
-| A4 | S5 | Auth endpoints: register, login, logout, me, with rate limiting | inline | pending | — |
-| A5 | S6 | RBAC dependency: role checks enforced per operation in the backend | inline | pending | — |
-| A6 | S6, S7 | Row-level security policies plus the non-superuser application role they need to be real | inline | pending | — |
-| A7 | S4 | Audit service wired into the actions the specification lists | inline | pending | — |
-| A8 | S8 | Isolation tests: another organization's data is unreachable; audit rows cannot be rewritten | inline | pending | — |
+| A2 | S4, S7 | Migration with integrity constraints, indexes and the append-only audit trigger | inline | done | revision `6292f9b04939`; upgrade/downgrade round trip proven; trigger present in `pg_trigger` |
+| A3 | S5 | Password hashing (Argon2id) and session-token primitives | inline | done | `app/core/security.py`; 15 unit tests; commit `97e6e9a` |
+| A4 | S5 | Server-side sessions and the registration/authentication service | inline | done | `app/models/user_session.py`, `app/services/auth.py`; revision `1be4915f3856`; 21 integration tests |
+| A5 | S5 | Auth endpoints: register, login, logout, me, with rate limiting and CSRF | inline | pending | — |
+| A6 | S6 | RBAC dependency: role checks enforced per operation in the backend | inline | pending | — |
+| A7 | S6, S7 | Row-level security policies plus the non-superuser application role they need to be real | inline | pending | — |
+| A8 | S4 | Audit service wired into the actions the specification lists | inline | pending | — |
+| A9 | S8 | Isolation tests: another organization's data is unreachable | inline | pending | — |
+
+Task IDs A5-A9 were renumbered when the session work split away from the
+endpoints task; A1-A4 keep the meaning they had when they were committed.
 
 ## Log
 
@@ -235,4 +252,57 @@ Test infrastructure: `tests/conftest.py` migrates the isolated test database onc
 per session and runs every test inside a transaction that is always rolled back,
 using `join_transaction_mode="create_savepoint"` so a test that deliberately
 provokes a database error can still finish cleanly.
+
+### L4 — A3 complete (2026-10-19)
+
+`app/core/security.py`, committed as `97e6e9a`, with 15 unit tests.
+
+- Argon2id for passwords (already a declared dependency), SHA-256 for session
+  tokens. The asymmetry is deliberate: a token carries 256 bits of entropy, so
+  slowness buys nothing there and would make every authenticated request a
+  denial-of-service lever; a human password is guessable, so slowness is the
+  defence.
+- `verify_password` returns `False` for a corrupted stored hash instead of
+  raising. A damaged row must look like a failed login, not like a server error
+  that tells the caller their input reached a different code path.
+- Password policy: 12 to 128 characters. Flagged in S5 as an assumption, because
+  §11.1 asks for secure authentication without stating a policy. Length is the
+  part that resists guessing; composition rules mostly produce `Password1!`.
+  The upper bound exists so hashing cannot be weaponised.
+
+### L5 — A4 complete (2026-10-19)
+
+`app/models/user_session.py`, `app/services/auth.py`, revision `1be4915f3856`,
+21 integration tests. Suite total: 55 passed.
+
+The design conflict this unit surfaced is worth recording, because it changed the
+schema:
+
+- `audit_logs.user_id` was initially `ON DELETE SET NULL`. Deleting a user made
+  PostgreSQL emit `UPDATE audit_logs SET user_id = NULL`, and the append-only
+  trigger rejected it — correctly. The `SET NULL` cascade was itself the silent
+  modification of history that §7.11 forbids: "quién aprobó esto" would have
+  become "nobody". Both audit foreign keys are now `ON DELETE RESTRICT`; a person
+  with history cannot be deleted, only deactivated.
+- The trigger is statement-level, so it fires even for an `UPDATE` that matches
+  zero rows. That is why the failure appeared in a test that had no audit rows at
+  all, and why `RESTRICT` (checked only when a referencing row exists) is the
+  behaviour that fits.
+- Because the revision had not been pushed and no environment had been deployed,
+  it was corrected in place and both databases were rebuilt (`downgrade base`,
+  `upgrade head`) instead of stacking a fixup migration on a mistake.
+- Registration hashes the password before writing anything, so a rejected
+  password cannot leave an account nobody can sign in to. The uniqueness
+  pre-check is a courtesy; the real guarantee is the unique constraint, and an
+  `IntegrityError` inside a savepoint is translated into the same domain error so
+  two simultaneous registrations produce a conflict, not a 500.
+- `authenticate` verifies against a cached dummy hash when the email is unknown,
+  so an attacker cannot enumerate accounts by timing.
+- `resolve_session` re-reads `is_active` on every request. A cookie must not
+  outvote a decision made in the database.
+
+Deliberately deferred, so it is not mistaken for forgotten: no `last_used_at`
+(nothing in the specification needs it and it would add a write per request) and
+no IP or user-agent stored on the session (data minimisation, given the
+data-protection obligations in §12.2).
 

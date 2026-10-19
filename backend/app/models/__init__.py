@@ -8,6 +8,7 @@ from app.models.audit_log import AuditLog
 from app.models.organization import Organization
 from app.models.organization_member import MembershipRole, OrganizationMember
 from app.models.user import User
+from app.models.user_session import UserSession
 
 __all__ = [
     "AuditLog",
@@ -15,4 +16,5 @@ __all__ = [
     "Organization",
     "OrganizationMember",
     "User",
+    "UserSession",
 ]
