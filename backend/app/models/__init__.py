@@ -12,6 +12,16 @@ from app.models.login_throttle import LoginThrottle
 from app.models.organization import Organization
 from app.models.organization_member import MembershipRole, OrganizationMember
 from app.models.provider_credential import ProviderConnectionStatus, ProviderCredential
+from app.models.reconciliation import (
+    MatchStatus,
+    MatchType,
+    PeriodStatus,
+    PeriodTransactionType,
+    ReconciliationMatch,
+    ReconciliationMatchItem,
+    ReconciliationPeriod,
+    ReconciliationPeriodTransaction,
+)
 from app.models.transactions import BankTransaction, LedgerTransaction, TransactionDirection
 from app.models.user import User
 from app.models.user_session import UserSession
@@ -26,11 +36,19 @@ __all__ = [
     "ImportStatus",
     "LedgerTransaction",
     "LoginThrottle",
+    "MatchStatus",
+    "MatchType",
     "MembershipRole",
     "Organization",
     "OrganizationMember",
+    "PeriodStatus",
+    "PeriodTransactionType",
     "ProviderConnectionStatus",
     "ProviderCredential",
+    "ReconciliationMatch",
+    "ReconciliationMatchItem",
+    "ReconciliationPeriod",
+    "ReconciliationPeriodTransaction",
     "TransactionDirection",
     "User",
     "UserSession",

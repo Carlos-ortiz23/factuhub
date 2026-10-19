@@ -20,7 +20,12 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import AuthContext, OrganizationContext, get_auth_context, get_db_session
 from app.core.permissions import Permission, role_has_permission
-from app.models import BankAccount, ImportJob
+from app.models import (
+    BankAccount,
+    ImportJob,
+    ReconciliationMatch,
+    ReconciliationPeriod,
+)
 from app.services import organizations as organizations_service
 
 
@@ -90,6 +95,50 @@ def require_import_permission(permission: Permission) -> Callable[..., Organizat
             organization_id=job.organization_id,
             permission=permission,
             not_found_detail="Import not found.",
+        )
+
+    return dependency
+
+
+def require_period_permission(permission: Permission) -> Callable[..., OrganizationContext]:
+    """Build the dependency for a route carrying `{period_id}`."""
+
+    def dependency(
+        period_id: UUID,
+        db: Annotated[Session, Depends(get_db_session)],
+        auth: Annotated[AuthContext, Depends(get_auth_context)],
+    ) -> OrganizationContext:
+        period = db.get(ReconciliationPeriod, period_id)
+        if period is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Period not found.")
+        return _context_for(
+            db,
+            auth,
+            organization_id=period.organization_id,
+            permission=permission,
+            not_found_detail="Period not found.",
+        )
+
+    return dependency
+
+
+def require_match_permission(permission: Permission) -> Callable[..., OrganizationContext]:
+    """Build the dependency for a route carrying `{match_id}`."""
+
+    def dependency(
+        match_id: UUID,
+        db: Annotated[Session, Depends(get_db_session)],
+        auth: Annotated[AuthContext, Depends(get_auth_context)],
+    ) -> OrganizationContext:
+        match = db.get(ReconciliationMatch, match_id)
+        if match is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Match not found.")
+        return _context_for(
+            db,
+            auth,
+            organization_id=match.organization_id,
+            permission=permission,
+            not_found_detail="Match not found.",
         )
 
     return dependency

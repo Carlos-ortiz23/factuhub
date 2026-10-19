@@ -11,6 +11,7 @@ from app.api.v1.endpoints import (
     health,
     imports,
     organizations,
+    reconciliation,
 )
 
 api_router = APIRouter()
@@ -20,3 +21,4 @@ api_router.include_router(organizations.router)
 api_router.include_router(connections.router)
 api_router.include_router(accounting_providers.router)
 api_router.include_router(imports.router)
+api_router.include_router(reconciliation.router)

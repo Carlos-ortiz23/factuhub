@@ -116,10 +116,10 @@ contradictory association; balance cases prepared with an accountant.
 | --- | --- | --- | --- | --- | --- |
 | R1 | S5 | `bank_accounts` model, migration and routes: create, list, read. Masked account number, nullable provider connection, ledger account code. | inline | done | 297 tests, migration `9b2d5f7a1c40` |
 | R2 | S1, S2, S3, S4 | Import pipeline: `import_jobs`, `import_row_errors`, `bank_transactions`, `ledger_transactions`; CSV/XLSX reader; explicit column mapping; exact money/date parsing; duplicate-file refusal; partial import with per-row errors; private file storage; retry of failed jobs; routes. | inline | done | 297 tests, ruff clean |
-| R3 | S11 | `reconciliation_periods` and `reconciliation_period_transactions`, creation, summary, transaction listing, submit/approve/reopen with role checks and locks. | inline | pending | — |
+| R3 | S11 | `reconciliation_periods` and `reconciliation_period_transactions`, creation, summary, transaction listing, submit/approve/reopen with role checks and locks. | inline | done | 19 API tests; migration `a01c4fdc5f36` |
 | R4 | S6, S7, S9 | Pure engine: normalizer, exact matcher, approximate scorer, duplicate candidates. No database access, so every rule is testable without a transaction. | inline | done | 47 engine tests; 344 total |
-| R5 | S8, S11 | Grouping (bounded), match persistence, suggestions, confirm/reject/cancel with row locks and duplicate/contradiction protection. | inline | pending | — |
-| R6 | S10 | Balances and period summary. Must be validated with an accountant before production use. | inline | pending | §8.6 warning recorded |
+| R5 | S8, S11 | Grouping (bounded), match persistence, suggestions, confirm/reject/cancel with row locks and duplicate/contradiction protection. | inline | done | 19 API tests; confirm locks movements and cancels alternatives |
+| R6 | S10 | Balances and period summary. Must be validated with an accountant before production use. | inline | done (assumption) | 7 balance tests; convention documented and warned |
 
 ## Log
 
@@ -254,3 +254,46 @@ Assumptions recorded for calibration with real data:
 
 Verification: `344 passed`; ruff check/format clean. Persistence (R3/R5) and
 balances (R6) are next; the engine itself has no database dependency.
+
+### L4 — periods, matches and balances (2026-10-19)
+
+Persistence and routes delivered on top of the pure engine:
+
+- `a01c4fdc5f36` adds `reconciliation_periods`,
+  `reconciliation_period_transactions`, `reconciliation_matches` and
+  `reconciliation_match_items`. The item table enforces exactly one movement per
+  row with a check constraint; the service enforces the cross-table rules.
+- `POST /bank-accounts/{id}/periods` refuses overlapping windows for the same
+  account, links existing movements to the period, and audits the creation.
+- `POST /periods/{id}/match-suggestions` replaces the pending suggestions. A
+  confirmed match is never regenerated; a rejected or cancelled combination is
+  remembered and not offered again. The run is capped at 500 suggestions and the
+  response reports `truncated`.
+- `POST /matches/{id}/confirm` locks the match, the period and the movements in
+  deterministic order, refuses if any movement is already confirmed elsewhere,
+  and cancels the suggested alternatives that shared a movement. Two concurrent
+  confirmations of the same movement cannot both succeed.
+- `reject` and `cancel` are terminal human decisions on a suggested match.
+- Period lifecycle: `open` → `in_review` (submit) → `approved` (approve) →
+  `reopened`. Approval requires `approve`; creating and deciding requires
+  `reconcile`; reads require `read`. Non-members get 404, never 403.
+
+Balances (`app/reconciliation/balances.py`) keep three figures separate:
+
+- `statement_difference_minor`: declared bank closing minus the imported bank
+  rows. A missing row is visible here even when the net difference is zero.
+- `adjusted_ledger_balance_minor`: ledger closing plus pending bank movements,
+  minus pending ledger movements. This is the explicit `bank_to_ledger`
+  convention, not a universal accounting truth.
+- `unexplained_difference_minor`: declared bank closing minus the adjusted
+  ledger.
+
+`balanced` requires zero pending movements, zero statement difference and zero
+unexplained difference. Approval uses that strict definition because this phase
+has no justification model; the specification's "unjustified differences" is
+narrower, and the conservative reading never approves what it cannot explain.
+
+Verification: **370 passed**; `ruff check` and `ruff format --check` clean; 19
+new API tests and 7 balance tests. Advisory: `GET /matches/{id}` was added beyond
+§9.5 so the UI can refresh one match after a decision; recorded here like the
+imports listing.
