@@ -199,6 +199,32 @@ Consequences: the backend distribution and service identity are
 `docs/PROJECT_SPEC.md` with an explicit note that its provisional name is
 superseded. No user-facing string may carry the old name.
 
+### S10 — The accounting provider is chosen from the UI
+
+Verbatim requirement from the user (2026-10-19):
+
+> recuerda que el usuario puede configurar desde la interfaz en cinfiguración la
+> app contable que va utilizar ya sea si es siigo, wordoffice etc... las que
+> existen en colombia y mas usadas
+
+Interpretation, bounded by the specification's own rules: the platform exposes a
+**provider catalogue** served by the backend (never hardcoded in the frontend),
+and the choice is made from the Configuración section. World Office is the first
+implementation; other Colombian providers (Siigo, and others added later) appear
+in the catalogue as *not yet available* rather than as a working integration,
+because spec rule 11 forbids simulating a connection that has not been verified.
+
+Acceptance criteria:
+
+- The catalogue is data returned by `GET /api/v1/accounting-providers`; adding a
+  provider must not require a frontend change.
+- Each entry declares its code, display name, supported connection modes and an
+  availability status.
+- Selecting an unavailable provider explains what is missing; it never pretends
+  to connect, sync, or return data.
+- Connecting a provider requires the capability-first adapter of spec §5.3, so a
+  provider can only be *available* once its official contract has been verified.
+
 ## Tasks
 
 | ID | Spec | Task | Route | Status | Evidence |
@@ -210,7 +236,9 @@ superseded. No user-facing string may carry the old name.
 | T5 | S6 | pytest configuration and test-database isolation | inline | done | `configfile: pyproject.toml`, 7 tests green; dev and test databases are separate containers |
 | T6 | S1 | Next.js scaffold (`frontend/`) without UI design work | inline | done | `npm run lint` clean; `npm run build` compiled, TypeScript checked, 4 static pages; product deps `0 vulnerabilities` (5 high are dev-only in the eslint chain) |
 | T7 | S8 | Verbatim specification in `docs/PROJECT_SPEC.md`; World Office findings in `docs/world-office-integration.md` | inline | done | files present |
-| T8 | S6 | Initial commit and push of the bootstrap | inline | pending | — |
+| T8 | S6 | Initial commit and push of the bootstrap | inline | blocked | commits `0ee38bf` and `b0e9811` created locally; push blocked pending deploy-key registration |
+| T10 | S9 | Git access for pushing to `factuhub` | inline | in progress | both pre-existing SSH keys are single-repo deploy keys (`siigo-mcp`, `e-VIR-LandingPage`); generated `~/.ssh/id_ed25519_factuhub` + `github.com-factuhub` alias |
+| T11 | S10 | Accounting provider catalogue (backend-served) and provider selection in Configuración | delegated later | pending | scheduled with the integration phase (spec §5.3, paso 7) |
 | T9 | S9 | Rename product identity to FactuHub (distribution, service name, API title, docs) | inline | done | distribution resolves `factuhub-backend 0.1.0` after reinstall; `7 passed` |
 
 ## Log
@@ -306,3 +334,38 @@ Applied to: `backend/pyproject.toml` distribution name, `SERVICE_NAME` and
 `app/main.py`, the health contract test, `README.md`, `env.example`, this
 document, and a vigencia note at the top of `docs/PROJECT_SPEC.md` (whose body
 stays verbatim). Recorded as spec S9.
+
+### L7 — Push blocked: SSH keys are single-repo deploy keys (2026-10-19)
+
+`git push` failed with `Permission to Carlos-ortiz23/factuhub.git denied to
+deploy key`. Cause: both existing keys authenticate as deploy keys bound to
+other repositories — `id_ed25519_siigo_mcp` resolves to `Carlos-ortiz23/siigo-mcp`
+and `id_ed25519_evir_landing` to `Carlos-ortiz23/e-VIR-LandingPage`. Deploy keys
+are per-repository and cannot be reused. No credential helper was configured
+either.
+
+Decision (user's choice): a dedicated deploy key for `factuhub`. Generated
+`~/.ssh/id_ed25519_factuhub`, appended a `github.com-factuhub` host alias to
+`~/.ssh/config` (backup left at `config.bak-20261019`), and pointed `origin` at
+`git@github.com-factuhub:Carlos-ortiz23/factuhub.git`. The existing keys and host
+entries were left untouched.
+
+Both commits are already in the local `main`; the push happens as soon as the
+public key is registered on the repository with write access.
+
+### L8 — Accounting provider must be selectable from the UI (2026-10-19)
+
+Verbatim user requirement:
+
+> listo, recuerda que el usuario puede configurar desde la interfaz en
+> cinfiguración la app contable que va utilizar ya sea si es siigo, wordoffice
+> etc... las que existen en colombia y mas usadas
+
+Recorded as spec S10 and task T11. Constraint kept from the specification: the
+provider catalogue is served by the backend and only lists as *available* what
+has a verified official contract. World Office stays the first implementation
+(spec: "Integración inicial: World Office"); additional Colombian providers are
+catalogue entries marked unavailable until verified. This is consistent with
+objective 9 ("Preparar una arquitectura extensible para integrar otros sistemas
+contables en el futuro") and rule 11 ("No simules una integración real cuando no
+exista una conexión verificada").
