@@ -117,7 +117,7 @@ contradictory association; balance cases prepared with an accountant.
 | R1 | S5 | `bank_accounts` model, migration and routes: create, list, read. Masked account number, nullable provider connection, ledger account code. | inline | done | 297 tests, migration `9b2d5f7a1c40` |
 | R2 | S1, S2, S3, S4 | Import pipeline: `import_jobs`, `import_row_errors`, `bank_transactions`, `ledger_transactions`; CSV/XLSX reader; explicit column mapping; exact money/date parsing; duplicate-file refusal; partial import with per-row errors; private file storage; retry of failed jobs; routes. | inline | done | 297 tests, ruff clean |
 | R3 | S11 | `reconciliation_periods` and `reconciliation_period_transactions`, creation, summary, transaction listing, submit/approve/reopen with role checks and locks. | inline | pending | — |
-| R4 | S6, S7, S9 | Pure engine: normalizer, exact matcher, approximate scorer, duplicate candidates. No database access, so every rule is testable without a transaction. | inline | pending | — |
+| R4 | S6, S7, S9 | Pure engine: normalizer, exact matcher, approximate scorer, duplicate candidates. No database access, so every rule is testable without a transaction. | inline | done | 47 engine tests; 344 total |
 | R5 | S8, S11 | Grouping (bounded), match persistence, suggestions, confirm/reject/cancel with row locks and duplicate/contradiction protection. | inline | pending | — |
 | R6 | S10 | Balances and period summary. Must be validated with an accountant before production use. | inline | pending | §8.6 warning recorded |
 
@@ -219,3 +219,38 @@ tests query the rows written through the API, not the service return value.
 
 Next task: R3 (periods) and R4 (pure engine). No review was requested for this
 candidate.
+
+### L3 — pure reconciliation engine (2026-10-19)
+
+Delivered in `backend/app/reconciliation/`:
+
+- `types.py`: `Movement` (side, date, positive minor units, direction, reference,
+  description, external id, fingerprint, import job) and `MatchConfig`.
+- `normalizer.py`: accent/case/punctuation normalisation, meaningful-word
+  Jaccard similarity, economic direction (bank credit = inflow; ledger debit =
+  inflow for an asset account), date distance/span, related-reference check.
+- `matcher.py`: hard rules (economic direction, date window, amount tolerance)
+  before scoring; configurable weights; exact candidates; suggestions; tie
+  detection.
+- `grouping.py`: one-to-many and many-to-one exact-sum groups, bounded to three
+  movements per side and 25 candidates per anchor.
+- `duplicates.py`: classifies same-import, re-import, distinct documents and
+  possible duplicates using fingerprint and external id, never date/amount alone.
+
+Assumptions recorded for calibration with real data:
+
+- Default amount tolerance **5,000 COP** (500,000 minor units); default date
+  window **3 days**.
+- `amount_score = 1 - difference / (2 * tolerance)`; at the tolerance edge it
+  contributes half its weight.
+- `date_score = 1 - days / (window + 1)`.
+- An unavailable component (missing reference or description on one side)
+  redistributes its weight instead of scoring zero. A **present but different**
+  reference scores zero and is included in the denominator.
+- Grouped references are related when equal or sharing an alphanumeric prefix
+  of at least three characters; a group with unrelated references is rejected.
+- Groups are exact sums only. A fee or difference is never absorbed.
+- Duplicates are reported, never deleted; confirmation stays a human decision.
+
+Verification: `344 passed`; ruff check/format clean. Persistence (R3/R5) and
+balances (R6) are next; the engine itself has no database dependency.
