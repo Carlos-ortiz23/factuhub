@@ -65,12 +65,6 @@ class Settings(BaseSettings):
     #: override.
     session_cookie_secure: bool | None = None
 
-    world_office_base_url: str = "https://api.worldoffice.cloud"
-    world_office_token: SecretStr | None = None
-    world_office_company_id: str | None = None
-    world_office_timeout_seconds: float = 30.0
-    world_office_max_retries: int = 3
-
     local_storage_path: Path = Path("backend/var/storage")
 
     @field_validator("app_allowed_hosts", mode="before")
