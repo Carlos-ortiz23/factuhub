@@ -195,7 +195,7 @@ Verbatim from the specification (§17):
 | A8 | S4 | Audit service wired into the actions the specification lists | inline | pending | — |
 | A9 | S8 | Isolation tests: another organization's data is unreachable | inline | pending | — |
 | A10 | S6 | Organization endpoints: create, list, detail | inline | done | `api/v1/endpoints/organizations.py`, `app/services/organizations.py`; RED `ModuleNotFoundError: app.core.permissions`, GREEN 104 passed with 9 new integration tests |
-| A11 | S6 | Membership management: add member, change role, remove member; 403 denials and last-admin protection | inline | pending | — |
+| A11 | S6 | Membership management: add member, change role, remove member; 403 denials and last-admin protection | inline | done | RED 13 failed / GREEN 15 passed in `test_members_api.py`; `require_permission(MANAGE_MEMBERS)` + `organizations_service.change_member_role`/`remove_member`; lock via `SELECT ... FOR UPDATE` on the company row |
 
 Task IDs A5-A9 were renumbered when the session work split away from the
 endpoints task; A1-A4 keep the meaning they had when they were committed.
@@ -390,11 +390,10 @@ Design decisions worth not re-litigating:
   over `MembershipRole` by test, so a fifth role cannot be added without
   deciding its permissions.
 
-Honest gap: **no route can produce a 403 yet.** Every role holds `READ`, so the
-only permission enforced today is one nobody lacks. The first real denial test
-arrives with A11, where `MANAGE_MEMBERS` is required and `viewer`/`reviewer`/
-`accountant` must be refused. Until then the 403 branch of
-`require_permission` is written but unexercised.
+Was there a route that could produce a 403? Not yet at this point: every role
+holds `READ`, so the only permission enforced was one nobody lacks. That gap
+closed with A11, where `MANAGE_MEMBERS` is required and `viewer`, `reviewer` and
+`accountant` are each refused by test.
 
 Tests: 16 new (104 total), all green; ruff clean. Test-first held this time — the
 two test files were written and run before any of the implementation existed, and
@@ -410,4 +409,51 @@ Open decision for the user (their domain, not mine to guess): whether
 `900123456-7` and `900123456` are the same NIT. Today they are two different
 companies because the platform compares the string exactly. Normalising NITs
 without knowing how their clients write them would be inventing a rule.
+
+### L8 — Membership management: the first real 403, and the only-admin invariant (2026-10-19)
+
+Spec §7.2 leaves "how a member is added" open. Decisions taken, all of them
+recorded as assumptions:
+
+- **Adding a member requires the account to exist**: `POST .../members` takes an
+  email and answers 404 when there is no account. The platform does not send
+  invitations yet, and an endpoint that pretended to would be worse than one
+  that refuses. The trade-off is real and named: this reveals account existence,
+  but only to an admin of a company, and the alternative (silent success) would
+  make the members screen lie.
+- **Invitations are not implemented**, so the members screen lists members and
+  adds existing ones. If the product needs invitations, that is a new task, not
+  a hidden behaviour.
+- **The last-admin rule returns 409**, on both role change and removal. The
+  reason is that a company with no admin cannot be repaired from inside the
+  product: nobody left can grant the role back.
+- **The role change takes effect on the next request** of the affected person,
+  because `require_permission` reads the membership from the database. A test
+  asserts this from the affected person's own session, not from the admin's.
+- **Removing a member removes the membership, not the account.** A test proves
+  the removed person's `/auth/me` still answers 200 while their access to that
+  company becomes 404. People with history are deactivated, never erased —
+  consistent with the `audit_logs` foreign keys being `ON DELETE RESTRICT`.
+
+The one genuinely risky part, and why: the last-admin rule is a read-then-write.
+Two admins demoting themselves at the same instant would each read the other and
+both succeed, leaving a company nobody can administer. `change_member_role` and
+`remove_member` therefore take `SELECT ... FOR UPDATE` on the *company* row
+before counting admins, which serialises membership changes per company. The lock
+is taken on `organizations` rather than on the membership row because the row
+being removed may be the one that would have to be locked.
+
+**Honest limit of the evidence**: the two-admin race is reasoned and locked, but
+it is *not* proven by a test here — the test harness deliberately runs every test
+inside one rolled-back transaction, so two concurrent connections cannot be
+produced inside it. That is what the independent verification pass is for.
+
+Tests: 15 new (119 total), ruff clean. Test-first held: the file ran first and
+produced 13 failures, then 15 passes.
+
+Test-writing note, worth keeping: the first run of these tests failed because the
+helper added a member by email without creating the account. Two of them passed
+for the wrong reason — a missing route also answers 404. A test that passes
+because the route does not exist is not evidence, which is why the two 404
+assertions are now paired with the 200 and 201 assertions in the same file.
 

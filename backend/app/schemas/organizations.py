@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 from app.models import MembershipRole
 
@@ -43,3 +43,30 @@ class OrganizationListResponse(BaseModel):
     """The companies the caller belongs to."""
 
     organizations: list[OrganizationResponse]
+
+
+class AddMemberRequest(BaseModel):
+    """Give an existing account a role in a company."""
+
+    email: EmailStr
+    role: MembershipRole
+
+
+class ChangeMemberRoleRequest(BaseModel):
+    """The role a member should hold from now on."""
+
+    role: MembershipRole
+
+
+class MemberResponse(BaseModel):
+    """A membership as the interface shows it.
+
+    Carries the person's name and address so the members table does not need an
+    extra request per row.
+    """
+
+    user_id: UUID
+    email: str
+    full_name: str
+    role: MembershipRole
+    created_at: datetime

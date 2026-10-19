@@ -10,11 +10,12 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models import MembershipRole, Organization, OrganizationMember
+from app.models import MembershipRole, Organization, OrganizationMember, User
+from app.services.auth import normalize_email
 
 
 class OrganizationError(ValueError):
@@ -27,6 +28,22 @@ class OrganizationInputError(OrganizationError):
 
 class TaxIdAlreadyRegisteredError(OrganizationError):
     """Another company already uses this tax identification."""
+
+
+class UserNotFoundError(OrganizationError):
+    """No account exists for the address being added."""
+
+
+class MembershipAlreadyExistsError(OrganizationError):
+    """That person already holds a role in this company."""
+
+
+class MembershipNotFoundError(OrganizationError):
+    """That person is not a member of this company."""
+
+
+class LastAdminError(OrganizationError):
+    """The change would leave the company without an administrator."""
 
 
 def _clean_required(value: str, field: str) -> str:
@@ -107,3 +124,118 @@ def find_membership(
         return None
     organization, role = row
     return organization, role
+
+
+def _lock_organization(db: Session, *, organization_id: UUID) -> None:
+    """Take the company's row lock for the rest of the transaction.
+
+    Every membership change is a read-then-write ("is there another admin?"),
+    and two admins demoting themselves at the same instant would both read the
+    other and both succeed, leaving a company nobody can administer. The lock
+    serialises membership changes per company; it is taken on `organizations`
+    rather than on a membership row because the row being changed may not exist
+    yet.
+    """
+    db.execute(select(Organization.id).where(Organization.id == organization_id).with_for_update())
+
+
+def _admin_count(db: Session, *, organization_id: UUID) -> int:
+    count = db.scalar(
+        select(func.count())
+        .select_from(OrganizationMember)
+        .where(
+            OrganizationMember.organization_id == organization_id,
+            OrganizationMember.role == MembershipRole.ADMIN,
+        )
+    )
+    return count or 0
+
+
+def add_member(
+    db: Session,
+    *,
+    organization_id: UUID,
+    email: str,
+    role: MembershipRole,
+) -> tuple[OrganizationMember, User]:
+    """Give an existing account a role in a company.
+
+    The account must already exist: the platform does not send invitations yet,
+    and pretending to would be worse than refusing.
+    """
+    normalized_email = normalize_email(email)
+    user = db.scalar(select(User).where(User.email == normalized_email))
+    if user is None:
+        raise UserNotFoundError(f"No account exists for {normalized_email}.")
+
+    membership = OrganizationMember(
+        organization_id=organization_id,
+        user_id=user.id,
+        role=role,
+    )
+    try:
+        with db.begin_nested():
+            db.add(membership)
+            db.flush()
+    except IntegrityError as exc:
+        # The composite primary key is the guarantee; the unique rule is the
+        # pair, so a person cannot hold two roles in the same company.
+        raise MembershipAlreadyExistsError(
+            f"{normalized_email} is already a member of this organization."
+        ) from exc
+    return membership, user
+
+
+def change_member_role(
+    db: Session,
+    *,
+    organization_id: UUID,
+    user_id: UUID,
+    role: MembershipRole,
+) -> OrganizationMember:
+    """Change somebody's role, refusing to leave the company without an admin."""
+    _lock_organization(db, organization_id=organization_id)
+
+    membership = db.scalar(
+        select(OrganizationMember).where(
+            OrganizationMember.organization_id == organization_id,
+            OrganizationMember.user_id == user_id,
+        )
+    )
+    if membership is None:
+        raise MembershipNotFoundError("That person is not a member of this organization.")
+
+    demoting_an_admin = membership.role is MembershipRole.ADMIN and role is not MembershipRole.ADMIN
+    if demoting_an_admin and _admin_count(db, organization_id=organization_id) <= 1:
+        raise LastAdminError(
+            "This is the only administrator: add another one before changing this role."
+        )
+
+    membership.role = role
+    db.flush()
+    return membership
+
+
+def remove_member(db: Session, *, organization_id: UUID, user_id: UUID) -> None:
+    """Remove somebody's membership, refusing to leave the company without an admin."""
+    _lock_organization(db, organization_id=organization_id)
+
+    membership = db.scalar(
+        select(OrganizationMember).where(
+            OrganizationMember.organization_id == organization_id,
+            OrganizationMember.user_id == user_id,
+        )
+    )
+    if membership is None:
+        raise MembershipNotFoundError("That person is not a member of this organization.")
+
+    if (
+        membership.role is MembershipRole.ADMIN
+        and _admin_count(db, organization_id=organization_id) <= 1
+    ):
+        raise LastAdminError(
+            "This is the only administrator: add another one before removing this membership."
+        )
+
+    db.delete(membership)
+    db.flush()
