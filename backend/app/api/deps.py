@@ -112,10 +112,11 @@ def require_csrf(
 
 @dataclass(frozen=True, slots=True)
 class OrganizationContext:
-    """The company being operated on, and the caller's role inside it."""
+    """The company being operated on, and who is acting in it, with which role."""
 
     organization: Organization
     role: MembershipRole
+    user_id: UUID
 
     @property
     def organization_id(self) -> UUID:
@@ -167,6 +168,6 @@ def require_permission(permission: Permission) -> Callable[..., OrganizationCont
                 detail=f"Your role in this organization cannot {permission.value}.",
             )
 
-        return OrganizationContext(organization=organization, role=role)
+        return OrganizationContext(organization=organization, role=role, user_id=auth.user.id)
 
     return dependency

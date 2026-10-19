@@ -129,8 +129,16 @@ def _translate(exc: organizations_service.OrganizationError) -> HTTPException:
     """
     if isinstance(exc, organizations_service.UserNotFoundError):
         return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
-    if isinstance(exc, organizations_service.MembershipNotFoundError):
+    if isinstance(
+        exc,
+        (
+            organizations_service.MembershipNotFoundError,
+            organizations_service.MembershipRevokedError,
+        ),
+    ):
         return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    if isinstance(exc, organizations_service.InsufficientPermissionError):
+        return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc))
     if isinstance(
         exc,
         (
@@ -167,6 +175,7 @@ def add_member(
         membership, user = organizations_service.add_member(
             db,
             organization_id=context.organization_id,
+            actor_id=context.user_id,
             email=payload.email,
             role=payload.role,
         )
@@ -208,6 +217,7 @@ def change_member_role(
         membership = organizations_service.change_member_role(
             db,
             organization_id=context.organization_id,
+            actor_id=context.user_id,
             user_id=user_id,
             role=payload.role,
         )
@@ -249,6 +259,7 @@ def remove_member(
         organizations_service.remove_member(
             db,
             organization_id=context.organization_id,
+            actor_id=context.user_id,
             user_id=user_id,
         )
     except organizations_service.OrganizationError as exc:

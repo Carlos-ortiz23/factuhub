@@ -14,6 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.permissions import Permission, role_has_permission
 from app.models import MembershipRole, Organization, OrganizationMember, User
 from app.services.auth import normalize_email
 
@@ -44,6 +45,14 @@ class MembershipNotFoundError(OrganizationError):
 
 class LastAdminError(OrganizationError):
     """The change would leave the company without an administrator."""
+
+
+class MembershipRevokedError(OrganizationError):
+    """The caller is no longer a member of this company."""
+
+
+class InsufficientPermissionError(OrganizationError):
+    """The role the caller holds now cannot manage members."""
 
 
 def _clean_required(value: str, field: str) -> str:
@@ -151,10 +160,40 @@ def _admin_count(db: Session, *, organization_id: UUID) -> int:
     return count or 0
 
 
+def _require_manage_members(db: Session, *, organization_id: UUID, actor_id: UUID) -> None:
+    """Re-check the caller's authority now that the company lock is held.
+
+    The route dependency already answered this before the handler ran, and that
+    answer can be stale: a demotion or a removal may commit while this request
+    waits for the lock. Reading the role again *under* the lock is what makes
+    the authority the request acts with the authority the company grants at
+    commit time. Reading a mapped attribute instead of this column would risk
+    the identity map answering with the pre-lock value, so the role is selected
+    on its own.
+
+    A caller who is no longer a member gets the same "not found" the dependency
+    gives a stranger: the company must not become an existence oracle just
+    because the membership vanished mid-request.
+    """
+    role = db.scalar(
+        select(OrganizationMember.role).where(
+            OrganizationMember.organization_id == organization_id,
+            OrganizationMember.user_id == actor_id,
+        )
+    )
+    if role is None:
+        raise MembershipRevokedError("Organization not found.")
+    if not role_has_permission(role, Permission.MANAGE_MEMBERS):
+        raise InsufficientPermissionError(
+            f"Your role in this organization cannot {Permission.MANAGE_MEMBERS.value}."
+        )
+
+
 def add_member(
     db: Session,
     *,
     organization_id: UUID,
+    actor_id: UUID,
     email: str,
     role: MembershipRole,
 ) -> tuple[OrganizationMember, User]:
@@ -162,8 +201,15 @@ def add_member(
 
     The account must already exist: the platform does not send invitations yet,
     and pretending to would be worse than refusing.
+
+    The lock comes first, before the authority is re-checked. Without it, an
+    admin removed by a concurrent request could still insert their own
+    membership once the removal commits.
     """
     normalized_email = normalize_email(email)
+    _lock_organization(db, organization_id=organization_id)
+    _require_manage_members(db, organization_id=organization_id, actor_id=actor_id)
+
     user = db.scalar(select(User).where(User.email == normalized_email))
     if user is None:
         raise UserNotFoundError(f"No account exists for {normalized_email}.")
@@ -190,11 +236,13 @@ def change_member_role(
     db: Session,
     *,
     organization_id: UUID,
+    actor_id: UUID,
     user_id: UUID,
     role: MembershipRole,
 ) -> OrganizationMember:
     """Change somebody's role, refusing to leave the company without an admin."""
     _lock_organization(db, organization_id=organization_id)
+    _require_manage_members(db, organization_id=organization_id, actor_id=actor_id)
 
     membership = db.scalar(
         select(OrganizationMember).where(
@@ -216,9 +264,10 @@ def change_member_role(
     return membership
 
 
-def remove_member(db: Session, *, organization_id: UUID, user_id: UUID) -> None:
+def remove_member(db: Session, *, organization_id: UUID, actor_id: UUID, user_id: UUID) -> None:
     """Remove somebody's membership, refusing to leave the company without an admin."""
     _lock_organization(db, organization_id=organization_id)
+    _require_manage_members(db, organization_id=organization_id, actor_id=actor_id)
 
     membership = db.scalar(
         select(OrganizationMember).where(
