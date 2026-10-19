@@ -1,0 +1,44 @@
+# --- Secrets -------------------------------------------------------------
+# `env.example` is the tracked template; the real `.env` never is.
+.env
+.env.*
+*.pem
+*.key
+
+# --- Python --------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# --- Node / Next.js ------------------------------------------------------
+node_modules/
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+
+# --- Databases -----------------------------------------------------------
+*.sqlite3
+pgdata/
+postgres-data/
+
+# --- Uploaded financial files (never commit real data) -------------------
+backend/var/
+backend/storage/
+*.xlsx
+*.csv
+!docs/examples/*.csv
+!docs/examples/*.xlsx
+
+# --- Editors / OS --------------------------------------------------------
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

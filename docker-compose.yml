@@ -1,0 +1,61 @@
+name: factuhub
+
+# Local development stack.
+#
+# This compose file is intentionally limited to the data stores the MVP needs.
+# Application processes (FastAPI, Next.js) run natively during development for
+# fast reloads; the Dockerfiles under backend/ and frontend/ exist for the
+# containerised deployment path described in the project specification.
+#
+# Redis / Celery are deliberately absent: the specification states the MVP may
+# start with in-process processing and only introduce a broker when file volume
+# or synchronisation requires it.
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: factuhub_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      # Deterministic collation keeps ordering identical across machines.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  # Isolated instance for the automated test suite. It never shares a volume
+  # with development data, so running destructive migrations in tests cannot
+  # touch anything a human is working with.
+  postgres_test:
+    image: postgres:17-alpine
+    container_name: factuhub_postgres_test
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_TEST_USER:?POSTGRES_TEST_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_TEST_PASSWORD:?POSTGRES_TEST_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_TEST_DB:?POSTGRES_TEST_DB is required}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      - "${POSTGRES_TEST_PORT:-5433}:5432"
+    volumes:
+      - postgres_test_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_TEST_USER} -d ${POSTGRES_TEST_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  postgres_data:
+    name: factuhub_postgres_data
+  postgres_test_data:
+    name: factuhub_postgres_test_data
