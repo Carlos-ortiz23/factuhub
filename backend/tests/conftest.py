@@ -15,10 +15,13 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config as AlembicConfig
+from fastapi.testclient import TestClient
 from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session
 
+from app.api.deps import get_db_session
 from app.core.config import get_settings
+from app.main import create_app
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 
@@ -73,3 +76,34 @@ def db_session(db_engine: Engine) -> Iterator[Session]:
         session.close()
         transaction.rollback()
         connection.close()
+
+
+#: Credentials the HTTP tests use. Not a real account and not a secret.
+TEST_PASSWORD = "conciliacion-segura-2026"
+TEST_EMAIL = "contador@example.com"
+
+
+@pytest.fixture
+def client(db_session: Session) -> Iterator[TestClient]:
+    """An HTTP client whose requests use the test transaction.
+
+    The database dependency is overridden, so no request can reach the
+    development database, and everything a request writes is discarded with the
+    surrounding transaction.
+    """
+    app = create_app()
+    app.dependency_overrides[get_db_session] = lambda: db_session
+    with TestClient(app) as test_client:
+        yield test_client
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def auth_client(client: TestClient) -> TestClient:
+    """A client that has registered an account and signed in."""
+    client.post(
+        "/api/v1/auth/register",
+        json={"email": TEST_EMAIL, "full_name": "Contadora de prueba", "password": TEST_PASSWORD},
+    )
+    client.post("/api/v1/auth/login", json={"email": TEST_EMAIL, "password": TEST_PASSWORD})
+    return client

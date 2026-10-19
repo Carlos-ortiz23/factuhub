@@ -7,15 +7,10 @@ state-changing request.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-
-from app.api.deps import get_db_session
-from app.main import create_app
 
 pytestmark = pytest.mark.integration
 
@@ -29,16 +24,6 @@ EMAIL = "contador@example.com"
 SESSION_COOKIE = "factuhub_session"
 CSRF_COOKIE = "factuhub_session_csrf"
 CSRF_HEADER = "X-CSRF-Token"
-
-
-@pytest.fixture
-def client(db_session: Session) -> Iterator[TestClient]:
-    """A client whose requests use the test transaction, never the dev database."""
-    app = create_app()
-    app.dependency_overrides[get_db_session] = lambda: db_session
-    with TestClient(app) as test_client:
-        yield test_client
-    app.dependency_overrides.clear()
 
 
 def register(

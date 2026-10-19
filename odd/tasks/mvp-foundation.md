@@ -207,12 +207,19 @@ Verbatim requirement from the user (2026-10-19):
 > app contable que va utilizar ya sea si es siigo, wordoffice etc... las que
 > existen en colombia y mas usadas
 
+Second, more explicit form (2026-10-19):
+
+> si me prestaste atención a lo que te dije de que yo como usuario pueda tener
+> la alternativa de conectar siigo, wordoffice, allegra etc... desde la
+> interfaz.
+
 Interpretation, bounded by the specification's own rules: the platform exposes a
 **provider catalogue** served by the backend (never hardcoded in the frontend),
 and the choice is made from the Configuración section. World Office is the first
-implementation; other Colombian providers (Siigo, and others added later) appear
-in the catalogue as *not yet available* rather than as a working integration,
-because spec rule 11 forbids simulating a connection that has not been verified.
+implementation; other Colombian providers (Siigo, Allegra, and others added
+later) appear in the catalogue as *not yet available* rather than as a working
+integration, because spec rule 11 forbids simulating a connection that has not
+been verified.
 
 Acceptance criteria:
 
@@ -224,6 +231,12 @@ Acceptance criteria:
   to connect, sync, or return data.
 - Connecting a provider requires the capability-first adapter of spec §5.3, so a
   provider can only be *available* once its official contract has been verified.
+- A connection cannot be reported as reviewed or implemented without naming the
+  evidence that supports the claim. This is enforced by construction in
+  `app/integrations/registry.py`, not by convention.
+- The list of "las más usadas" is market knowledge, not something to invent: the
+  three the user named are present today, and the rest are added when the user
+  or a verifiable source names them.
 
 ## Tasks
 
@@ -238,7 +251,7 @@ Acceptance criteria:
 | T7 | S8 | Verbatim specification in `docs/PROJECT_SPEC.md`; World Office findings in `docs/world-office-integration.md` | inline | done | files present |
 | T8 | S6 | Initial commit and push of the bootstrap | inline | blocked | commits `0ee38bf` and `b0e9811` created locally; push blocked pending deploy-key registration |
 | T10 | S9 | Git access for pushing to `factuhub` | inline | in progress | both pre-existing SSH keys are single-repo deploy keys (`siigo-mcp`, `e-VIR-LandingPage`); generated `~/.ssh/id_ed25519_factuhub` + `github.com-factuhub` alias |
-| T11 | S10 | Accounting provider catalogue (backend-served) and provider selection in Configuración | delegated later | pending | scheduled with the integration phase (spec §5.3, paso 7) |
+| T11 | S10 | Accounting provider catalogue (backend-served) and provider selection in Configuración | inline | catalogue done | `app/integrations/registry.py`, `GET /api/v1/accounting-providers`, 12 tests; the Configuración screen itself belongs to the UI phase |
 | T9 | S9 | Rename product identity to FactuHub (distribution, service name, API title, docs) | inline | done | distribution resolves `factuhub-backend 0.1.0` after reinstall; `7 passed` |
 
 ## Log
@@ -369,3 +382,34 @@ catalogue entries marked unavailable until verified. This is consistent with
 objective 9 ("Preparar una arquitectura extensible para integrar otros sistemas
 contables en el futuro") and rule 11 ("No simules una integración real cuando no
 exista una conexión verificada").
+
+### L9 — The catalogue became real; two gaps in L8 closed (2026-10-19)
+
+The user asked, before continuing, whether the provider requirement had really
+been taken into account. It had been recorded, but two things were wrong:
+
+1. S10 named Siigo and "others", while the user had said **Allegra** explicitly.
+   Corrected: Siigo, World Office and Allegra are in the catalogue, asserted by
+   test.
+2. T11 was parked in the integration phase, so the requirement existed only as a
+   note. The catalogue is now built: `app/integrations/registry.py`,
+   `GET /api/v1/accounting-providers`, 12 tests. It is the piece the
+   Configuración screen reads; the screen itself stays in the UI phase, per the
+   user's own instruction that design comes last.
+
+How the specification's rule 11 was turned into something enforceable: a
+`ProviderConnection` cannot be constructed with readiness `contract_reviewed` or
+`implemented` unless it names its evidence, so the code physically cannot present
+an unverified integration as real. Test-first was missed for this module — it was
+written before its tests — so the guard was instead proven non-vacuous by removing
+it and observing exactly the two guard tests fail, then restoring it.
+
+Honest state of the catalogue today: **no provider is connectable**. World Office
+declares file import and API both as `contract_reviewed` (with the evidence and
+the two known gaps: unpublished filter attribute names and the pilot company's
+credentials); Siigo and Allegra are listed with zero connections, because nothing
+about their contracts has been checked in this project yet. That is the truthful
+answer to "puedo conectar Siigo hoy": todavía no.
+
+Open input, asked to the user: the list of "las más usadas". That is market
+knowledge about their own clients, and inventing it would be worse than asking.

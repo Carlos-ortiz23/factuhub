@@ -43,6 +43,7 @@ addopts = "-ra --strict-markers --strict-config"
 asyncio_mode = "auto"
 markers = [
     "integration: requires a live PostgreSQL instance (TEST_DATABASE_URL)",
+    "unit: pure logic, no database, no HTTP",
 ]
 
 [tool.ruff]
