@@ -293,7 +293,28 @@ unexplained difference. Approval uses that strict definition because this phase
 has no justification model; the specification's "unjustified differences" is
 narrower, and the conservative reading never approves what it cannot explain.
 
-Verification: **370 passed**; `ruff check` and `ruff format --check` clean; 19
-new API tests and 7 balance tests. Advisory: `GET /matches/{id}` was added beyond
+Verification: **372 passed**; `ruff check` and `ruff format --check` clean;
+21 API tests and 7 balance tests. `alembic check` reports no drift. Advisory: `GET /matches/{id}` was added beyond
 §9.5 so the UI can refresh one match after a decision; recorded here like the
 imports listing.
+
+### §12 coverage audit (2026-10-19)
+
+- §12.1 Importación: valid, empty, missing columns, invalid dates/amounts,
+  debit/credit, duplicate file, legitimate repeated rows, size limits, partial
+  error — all covered by the import tests.
+- §12.2 Conciliación: exact, date tolerance, reference match, absent reference,
+  equivalent candidates, amount difference, incompatible direction, already
+  reconciled, group, bank fee not absorbed, unexplained difference — covered by
+  engine and API tests.
+- §12.3 Integridad: cross-company access, repeated import, double approval,
+  reopening without permission, contradictory association, double confirmation —
+  covered at HTTP level. The true concurrent race is guarded by `FOR UPDATE` on
+  the match, period and movements but is **not** exercised by a concurrent HTTP
+  test, because the test harness runs each test in one rolled-back transaction.
+  The same limitation was recorded for A12.
+- §12.4 Saldos: initial plus movements, debits/credits, closing, in-transit
+  items, unexplained differences and reopened periods are tested. Justified
+  differences are **not modeled**: the accountant convention is still pending, so
+  approval is stricter (all pending items must be zero). This is a documented
+  gap, not a silent assumption.

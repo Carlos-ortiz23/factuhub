@@ -519,3 +519,44 @@ def test_an_account_from_another_company_cannot_open_a_period(auth_client: TestC
     response = create_period(stranger, account["id"])
 
     assert response.status_code == 404
+
+
+def test_an_approved_period_cannot_be_approved_twice(auth_client: TestClient) -> None:
+    organization = company(auth_client)
+    account = bank_account(auth_client, organization["id"])
+    import_pair(auth_client, organization["id"], account["id"])
+    period = create_period(auth_client, account["id"]).json()
+    match = generate(auth_client, period["id"])["matches"][0]
+    auth_client.post(f"{MATCHES}/{match['id']}/confirm", headers=csrf_headers(auth_client))
+    auth_client.post(f"{PERIODS}/{period['id']}/submit-review", headers=csrf_headers(auth_client))
+    assert (
+        auth_client.post(
+            f"{PERIODS}/{period['id']}/approve", headers=csrf_headers(auth_client)
+        ).status_code
+        == 200
+    )
+
+    second = auth_client.post(
+        f"{PERIODS}/{period['id']}/approve", headers=csrf_headers(auth_client)
+    )
+
+    assert second.status_code == 409
+
+
+def test_reopening_requires_the_approval_permission(auth_client: TestClient) -> None:
+    organization = company(auth_client)
+    account = bank_account(auth_client, organization["id"])
+    import_pair(auth_client, organization["id"], account["id"])
+    period = create_period(auth_client, account["id"]).json()
+    match = generate(auth_client, period["id"])["matches"][0]
+    auth_client.post(f"{MATCHES}/{match['id']}/confirm", headers=csrf_headers(auth_client))
+    auth_client.post(f"{PERIODS}/{period['id']}/submit-review", headers=csrf_headers(auth_client))
+    auth_client.post(f"{PERIODS}/{period['id']}/approve", headers=csrf_headers(auth_client))
+    add_member(auth_client, organization["id"], "consulta@example.com", "viewer")
+    viewer = sign_in(auth_client, "consulta@example.com")
+
+    reopened = viewer.post(f"{PERIODS}/{period['id']}/reopen", headers=csrf_headers(viewer))
+    submitted = viewer.post(f"{PERIODS}/{period['id']}/submit-review", headers=csrf_headers(viewer))
+
+    assert reopened.status_code == 403
+    assert submitted.status_code == 403
