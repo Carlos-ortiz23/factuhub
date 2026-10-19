@@ -67,6 +67,19 @@ def test_a_provider_nothing_was_verified_for_is_not_connectable() -> None:
     assert get_provider("invented") is None
 
 
+def test_siigo_declares_a_reviewed_contract_but_not_a_working_connection() -> None:
+    # The adapter exists, but "reviewed against the documentation" and "a company
+    # can connect today" are different claims, and the second one needs a real
+    # credential exchange that has not happened yet.
+    connections = registry.SIIGO.connections
+
+    assert len(connections) == 1
+    assert connections[0].mode is ConnectionMode.API
+    assert connections[0].readiness is Readiness.CONTRACT_REVIEWED
+    assert "docs/siigo-integration.md" in connections[0].evidence
+    assert registry.SIIGO.is_connectable is False
+
+
 def test_no_provider_claims_a_working_connection_yet() -> None:
     # True today: the integration phase has not started. When it does, this test
     # fails on purpose, forcing whoever implements it to update the claim and the

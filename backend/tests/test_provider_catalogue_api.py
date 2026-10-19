@@ -32,9 +32,12 @@ def test_the_catalogue_states_plainly_that_nothing_is_connectable_yet(
     providers = {p["code"]: p for p in auth_client.get(CATALOGUE).json()["providers"]}
 
     assert all(provider["connectable"] is False for provider in providers.values())
-    # Siigo and Alegra are listed on purpose but claim nothing: no connection
-    # mode is published for them until their contracts have been reviewed.
-    assert providers["siigo"]["connections"] == []
+    # Siigo's contract has been reviewed, so it publishes one connection — but a
+    # reviewed contract is not a working connection, and `connectable` stays
+    # False until a real credential exchange is verified.
+    assert [c["mode"] for c in providers["siigo"]["connections"]] == ["api"]
+    assert providers["siigo"]["connections"][0]["readiness"] == "contract_reviewed"
+    # Alegra still claims nothing: its contract has not been reviewed.
     assert providers["alegra"]["connections"] == []
 
 

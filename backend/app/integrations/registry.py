@@ -98,7 +98,23 @@ WORLD_OFFICE = AccountingProvider(
     ),
 )
 
-SIIGO = AccountingProvider(code="siigo", display_name="Siigo")
+SIIGO = AccountingProvider(
+    code="siigo",
+    display_name="Siigo",
+    connections=(
+        ProviderConnection(
+            mode=ConnectionMode.API,
+            readiness=Readiness.CONTRACT_REVIEWED,
+            evidence=(
+                "Official Siigo API documentation reviewed 2026-10-19 "
+                "(docs/siigo-integration.md): authentication, /v1/journals and its date "
+                "filters and pagination are confirmed. The adapter exists and is unit "
+                "tested against a fake transport, but it has not been exercised with a "
+                "real company's credentials, so it is not 'implemented' yet (§17 rule 11)"
+            ),
+        ),
+    ),
+)
 
 #: Brand verified on 2026-10-19 at https://www.alegra.co/colombia ("Alegra
 #: Software"), spelled with a single g. The identifier is lowercase like the rest
