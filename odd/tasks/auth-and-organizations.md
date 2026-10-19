@@ -196,6 +196,7 @@ Verbatim from the specification (§17):
 | A9 | S8 | Isolation tests: another organization's data is unreachable | inline | pending | — |
 | A10 | S6 | Organization endpoints: create, list, detail | inline | done | `api/v1/endpoints/organizations.py`, `app/services/organizations.py`; RED `ModuleNotFoundError: app.core.permissions`, GREEN 104 passed with 9 new integration tests |
 | A11 | S6 | Membership management: add member, change role, remove member; 403 denials and last-admin protection | inline | done | RED 13 failed / GREEN 15 passed in `test_members_api.py`; `require_permission(MANAGE_MEMBERS)` + `organizations_service.change_member_role`/`remove_member`; lock via `SELECT ... FOR UPDATE` on the company row |
+| A12 | S6, S7 | Re-read the caller's authority under the company lock, and lock `add_member` too (4R finding R1-AUTHZ-RACE) | inline | done | commit `4c02f5e`; 194 changed lines; 7 new probes in `tests/test_membership_invariant.py`; 7/7 fail when the re-check is removed; review `review-bb80a8ee3557fb3b` approved and acknowledged |
 
 Task IDs A5-A9 were renumbered when the session work split away from the
 endpoints task; A1-A4 keep the meaning they had when they were committed.
@@ -519,3 +520,93 @@ HTTP layer (it was proven at the service-and-commit layer, which is exactly what
 the endpoints call), accounts with `is_active = false` (no endpoint can create
 one yet), and RLS (A7, still pending).
 
+
+### L10 — Native 4R review of A6/A10/A11, and the correction it demanded (2026-10-19)
+
+The review ran over `ed3005e..39e54a7` (tier `high`, 837 changed lines) on the
+successor-capable compact contract. Two things happened before any reviewer
+produced a result.
+
+**The transport was never unavailable; the binary was.** All three reviewer
+slots refused with `opencode_review_transport_relay_refused (reason:
+relay_unavailable)`. The plugin maps *any* failure of its `gentle-ai` child to
+that one reason, so the message says nothing about the cause. Running the child
+directly with the same frames worked, which narrowed it to the environment:
+`opencode serve --service` (PID 9561) hosts the plugin and its `PATH` does not
+include `~/go/bin`, where `gentle-ai` lives. `spawn("gentle-ai")` was ENOENT.
+Fixed with a user-level symlink `~/.local/bin/gentle-ai -> ~/go/bin/gentle-ai`;
+`~/.local/bin` is already on the service's `PATH`. No system change, no restart
+needed, because the child is spawned per call.
+
+**The review found a real bug of mine.** `R1-AUTHZ-RACE` (risk lens, CRITICAL):
+`require_permission(MANAGE_MEMBERS)` resolved the caller's role in the route
+dependency, *before* the company lock, and the service never read it again. A
+demotion that committed while an already-authorized `PATCH` waited on the lock
+therefore did not revoke it: the blocked request resumed after the demotion and
+could set `role=admin` on itself or promote an accomplice. `add_member` took no
+lock at all, so a removed admin's in-flight `POST` could re-insert their own
+membership once the delete committed. The refuter corroborated it and opened
+`correction_required`.
+
+The correction (194 changed lines, budget 200) takes the company lock first in
+all three service functions and re-reads the caller's membership under it
+through a column-only select, so the identity map cannot answer with the
+pre-lock role. A role that no longer grants `MANAGE_MEMBERS` is
+`InsufficientPermissionError` → 403; a caller who is no longer a member is
+`MembershipRevokedError` → 404 with the same "Organization not found." the
+dependency gives a stranger, so the company stays out of reach as an existence
+oracle. `OrganizationContext` now carries `user_id` so the handler can name the
+actor.
+
+The race still cannot be reproduced in this suite (one connection, rolled back
+per test), so it is pinned by the mechanism, as A11 was. The new block in
+`tests/test_membership_invariant.py` asserts that a demoted caller is refused by
+all three functions, that a removed caller is refused by all three, and that the
+first membership statement after `SELECT ... FOR UPDATE` is the role-only read —
+i.e. the order that constitutes the fix. Non-vacuity was checked by replacing
+the three re-checks with `pass`: **7 of 7 new tests fail**, while the 3 A11 tests
+keep passing because they do not depend on the re-check. Commit `4c02f5e`.
+129 tests green, ruff check and format clean.
+
+The correction changed the candidate tree, so the provider retired the frozen
+target and authorised a successor lineage (`review-bb80a8ee3557fb3b`,
+`scope_changed`). That review re-ran the three lenses over the corrected
+candidate and **approved**: `review-acknowledged/v1`, authority burned, no
+acknowledgement left pending.
+
+Advisories from the approved round, recorded and deliberately not fixed here
+(none blocks, none reopens the review):
+
+1. **Post-commit response assembly (`R4-1`).** The handlers build their response
+   after `db.commit()` from ORM instances. With the default `expire_on_commit`,
+   that issues fresh SELECTs after the write is already durable; a failure in
+   that window returns 500 for a committed change, and the client's retry then
+   sees the opposite outcome. Cheap fix: assemble the response from values
+   captured before the commit.
+2. **No bounded lock wait (`R4-2`).** Membership writes can wait indefinitely on
+   `SELECT ... FOR UPDATE` while holding a pooled connection, with no
+   `lock_timeout`, retry, or wait metric. Correctness is fine; the failure mode
+   is a silent stall.
+3. **CSRF is proven on one of three routes (`R3-csrf-per-route-gap`).**
+   `test_members_api.py` exercises the missing-token case only for
+   `POST .../members`; dropping `_csrf` from `PATCH` or `DELETE` would keep the
+   suite green.
+4. **The A11 lock test asserts presence, not order (`R3-lock-order-unasserted`).**
+   It proves a `FOR UPDATE` on `organizations` was issued, not that it preceded
+   the admin count. The A12 ordering test does pin the role re-read, which is
+   the sibling gap.
+5. **Unspecified failure paths (`R3-patch-failure-paths`,
+   `R3-integrityerror-mislabel`).** `PATCH` has no test for a non-member target
+   or an unknown role, and `add_member` maps every `IntegrityError` inside the
+   savepoint to "already a member", including one that is not the composite-key
+   conflict.
+6. **SQL-text assertions (`R3-sql-text-assertions`).** The invariant probes are
+   white-box and coupled to SQLAlchemy's statement rendering. Accepted: the
+   alternative is a second connection, which this fixture forbids.
+7. Already known and unchanged: the account-existence signal to a company admin
+   (`R1-ACCOUNT-ORACLE`), Pydantic's app-wide silent extra fields
+   (`R1-EXTRA-FIELDS`, `R3-extra-fields-ignored`), and the absent audit writer
+   (`R4-3`, A8 pending).
+
+Next: A7 (RLS plus the non-superuser role), A8 (audit wiring), A9 (isolation
+tests).
