@@ -457,3 +457,65 @@ for the wrong reason — a missing route also answers 404. A test that passes
 because the route does not exist is not evidence, which is why the two 404
 assertions are now paired with the 200 and 201 assertions in the same file.
 
+### L9 — Independent verification of A6/A10/A11 (2026-10-19)
+
+Baseline `ed3005e`, candidate `0f17d74`. A verification pass that was not written
+by the author of the change ran the suite itself (`119 passed`), walked every
+mutating route to confirm each declares the permission it needs, compared the
+candidate against a copy of the baseline route by route, and built a scratch
+PostgreSQL database to test the concurrency claim with **two real connections and
+real commits** — the thing this suite cannot do.
+
+**Verdict: no blockers.** A6, A10 and A11 met. What was observed, not argued:
+
+- Concurrent self-demotion of two admins, **20 runs**: exactly one succeeded
+  every time, the loser was refused with the last-admin message, and the company
+  ended with one admin. Concurrent removals, 10 runs: the same. Mixed
+  demote-while-remove, 10 runs: never zero admins.
+- **Negative control**: the same rig with the lock skipped reached **zero admins**.
+  A probe that cannot reproduce the failure cannot support the claim that the
+  protection works, so this is the part that makes the result evidence.
+- The lock is emitted as `SELECT organizations.id ... FOR UPDATE`, and mutual
+  exclusion was shown directly: a second connection holding `FOR UPDATE NOWAIT`
+  was refused with `55P03` until the first committed.
+- A refused demotion left the membership row identical, `created_at` included.
+- The 404 for a non-member is the same status *and body* for a real company id
+  and for a never-existing UUID — the enumeration-oracle rule holds in practice,
+  not just in the test that names it.
+
+Three advisories, none of them a blocker, recorded rather than silently fixed
+because a fix after verification would need verification of its own:
+
+1. **Unknown JSON fields are ignored with success.** `PATCH .../members/{id}`
+   with `{"role": "reviewer", "is_admin": true}` answers 200 and drops
+   `is_admin`. This is Pydantic's default and is app-wide, including
+   `RegisterRequest`, so it predates this change. `extra="forbid"` on the request
+   models would turn typos into loud failures — a good follow-up, applied to all
+   schemas at once rather than to one of them.
+2. **CSRF is evaluated after the permission.** A member who lacks the permission
+   and sends no CSRF token gets the permission message rather than the CSRF one
+   (same 403 either way). Cosmetic; fixing it means reordering the route
+   parameters.
+3. **`POST .../members` reveals whether an account exists** to a company admin.
+   Already recorded in L8 as a deliberate trade-off.
+
+The verification pass also left its concurrency probes as regression tests, now
+committed as `tests/test_membership_invariant.py`: they assert that both
+membership changes lock the company row before counting admins, and that a
+refused change leaves the row untouched. They cannot reproduce the race — this
+suite runs every test inside one rolled-back transaction — so they pin the
+mechanism the race depends on instead.
+
+Both claims about those tests were spot-checked by the parent rather than
+trusted: removing the lock makes 2 of the 3 tests fail (the two lock assertions)
+and restoring it makes them pass. The first attempt at that spot check silently
+proved nothing, because `ruff format` had collapsed the `db.execute(...)` call
+onto one line and the replacement never matched — a reminder that a
+non-vacuity check has to confirm the edit actually happened, not just that the
+tests came back green.
+
+Untested, and stated as untested rather than assumed fine: the race through the
+HTTP layer (it was proven at the service-and-commit layer, which is exactly what
+the endpoints call), accounts with `is_active = false` (no endpoint can create
+one yet), and RLS (A7, still pending).
+
